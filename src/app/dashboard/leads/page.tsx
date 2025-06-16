@@ -1,339 +1,554 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import toast from 'react-hot-toast'
-import { motion } from 'framer-motion'
-import { ArrowLeftIcon } from '@heroicons/react/24/outline'
 import Link from 'next/link'
+import { motion } from 'framer-motion'
+import {
+  PlusIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  EyeIcon,
+  PencilIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+  PhoneIcon,
+  EnvelopeIcon,
+} from '@heroicons/react/24/outline'
+import toast from 'react-hot-toast'
+import LeadDetailModal from '@/components/leads/LeadDetailModal'
 
-const leadSchema = z.object({
-  full_name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
-  email: z.string().email('Email inválido').optional().or(z.literal('')),
-  phone: z.string().min(10, 'Telefone deve ter pelo menos 10 dígitos'),
-  cpf: z.string().optional(),
-  address: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  zip_code: z.string().optional(),
-  age: z.number().min(1).max(120).optional(),
-  gender: z.enum(['male', 'female', 'other']).optional(),
-  notes: z.string().optional(),
-})
+interface Lead {
+  id: string
+  full_name: string
+  email: string | null
+  phone: string
+  cpf: string | null
+  address: string | null
+  city: string | null
+  state: string | null
+  zip_code: string | null
+  age: number | null
+  gender: 'male' | 'female' | 'other' | null
+  notes: string | null
+  status: 'new' | 'contacted' | 'scheduled' | 'converted' | 'lost'
+  indicated_by: string
+  clinic_id: string
+  created_at: string
+  updated_at: string
+  users?: {
+    full_name: string
+    email: string
+  }
+}
 
-type LeadFormData = z.infer<typeof leadSchema>
+const statusOptions = [
+  { value: 'new', label: 'Novo', color: 'primary' },
+  { value: 'contacted', label: 'Contatado', color: 'warning' },
+  { value: 'scheduled', label: 'Agendado', color: 'primary' },
+  { value: 'converted', label: 'Convertido', color: 'success' },
+  { value: 'lost', label: 'Perdido', color: 'danger' },
+]
 
-export default function NewLeadPage() {
+export default function LeadsPage() {
   const { profile } = useAuth()
-  const router = useRouter()
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
+  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
   const supabase = createClient()
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-    reset,
-  } = useForm<LeadFormData>({
-    resolver: zodResolver(leadSchema),
-  })
+  useEffect(() => {
+    if (profile) {
+      fetchLeads()
+    }
+  }, [profile])
 
-  const onSubmit = async (data: LeadFormData) => {
-    if (!profile) return
-
+  const fetchLeads = async () => {
     try {
-      setIsSubmitting(true)
-
-      // Buscar a clínica do usuário
-      const { data: userClinic, error: clinicError } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile.id)
-        .single()
-
-      if (clinicError || !userClinic) {
-        throw new Error('Usuário não está associado a uma clínica')
-      }
-
-      // Preparar dados do lead
-      const leadData = {
-        ...data,
-        email: data.email || null,
-        cpf: data.cpf || null,
-        address: data.address || null,
-        city: data.city || null,
-        state: data.state || null,
-        zip_code: data.zip_code || null,
-        age: data.age || null,
-        gender: data.gender || null,
-        notes: data.notes || null,
-        indicated_by: profile.id,
-        clinic_id: userClinic.clinic_id,
-        status: 'new' as const,
-      }
-
-      const { error } = await supabase
+      setLoading(true)
+      
+      let query = supabase
         .from('leads')
-        .insert(leadData)
+        .select(`
+          *,
+          users:indicated_by (
+            full_name,
+            email
+          )
+        `)
+        .order('created_at', { ascending: false })
+
+      // Filtrar baseado no role do usuário
+      if (profile?.role === 'consultant') {
+        query = query.eq('indicated_by', profile.id)
+      } else if (profile?.role === 'manager') {
+        // Manager vê leads de sua equipe + próprios
+        const { data: hierarchy } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+        
+        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id)
+        
+        query = query.in('indicated_by', consultantIds)
+      }
+      // Clinic admin/viewer veem todos (sem filtros adicionais)
+
+      const { data, error } = await query
 
       if (error) {
         throw error
       }
 
-      toast.success('Lead cadastrado com sucesso!')
-      reset()
-      router.push('/dashboard/leads')
+      setLeads(data || [])
     } catch (error: any) {
-      console.error('Erro ao cadastrar lead:', error)
-      toast.error(error.message || 'Erro ao cadastrar lead')
+      console.error('Erro ao buscar leads:', error)
+      toast.error('Erro ao carregar leads')
     } finally {
-      setIsSubmitting(false)
+      setLoading(false)
     }
+  }
+
+  const updateLeadStatus = async (leadId: string, newStatus: string) => {
+    try {
+      setUpdatingStatus(leadId)
+      
+      const { error } = await supabase
+        .from('leads')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', leadId)
+
+      if (error) {
+        throw error
+      }
+
+      setLeads(prev => prev.map(lead => 
+        lead.id === leadId 
+          ? { ...lead, status: newStatus as any, updated_at: new Date().toISOString() }
+          : lead
+      ))
+
+      toast.success('Status atualizado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao atualizar status:', error)
+      toast.error('Erro ao atualizar status')
+    } finally {
+      setUpdatingStatus(null)
+    }
+  }
+
+  const handleViewLead = (leadId: string) => {
+    setSelectedLeadId(leadId)
+    setIsModalOpen(true)
+  }
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false)
+    setSelectedLeadId(null)
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'converted':
+        return <CheckCircleIcon className="h-4 w-4" />
+      case 'lost':
+        return <XCircleIcon className="h-4 w-4" />
+      default:
+        return <ClockIcon className="h-4 w-4" />
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    const option = statusOptions.find(opt => opt.value === status)
+    return option?.color || 'secondary'
+  }
+
+  // Filtrar leads
+  const filteredLeads = leads.filter(lead => {
+    const matchesSearch = !searchTerm || 
+      lead.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.phone.includes(searchTerm) ||
+      lead.cpf?.includes(searchTerm)
+    
+    const matchesStatus = !statusFilter || lead.status === statusFilter
+    
+    const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
+    
+    return matchesSearch && matchesStatus && matchesDate
+  })
+
+  const stats = {
+    total: leads.length,
+    new: leads.filter(l => l.status === 'new').length,
+    contacted: leads.filter(l => l.status === 'contacted').length,
+    converted: leads.filter(l => l.status === 'converted').length,
+    conversionRate: leads.length > 0 ? ((leads.filter(l => l.status === 'converted').length / leads.length) * 100).toFixed(1) : '0'
+  }
+
+  const canEdit = profile?.role === 'clinic_admin' || profile?.role === 'manager'
+  const canCreate = profile?.role !== 'clinic_viewer'
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="loading-spinner w-8 h-8"></div>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Link
-            href="/dashboard/leads"
-            className="btn btn-ghost btn-sm"
-          >
-            <ArrowLeftIcon className="h-4 w-4 mr-2" />
-            Voltar
-          </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-secondary-900">
-              Novo Lead
-            </h1>
-            <p className="text-secondary-600">
-              Cadastre uma nova indicação
-            </p>
-          </div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-secondary-900">
+            {profile?.role === 'consultant' ? 'Meus Leads' : 'Leads'}
+          </h1>
+          <p className="text-secondary-600">
+            {profile?.role === 'consultant' 
+              ? 'Gerencie suas indicações'
+              : 'Gerencie todos os leads da clínica'
+            }
+          </p>
         </div>
+        
+        {canCreate && (
+          <Link href="/dashboard/leads/new" className="btn btn-primary">
+            <PlusIcon className="h-4 w-4 mr-2" />
+            Novo Lead
+          </Link>
+        )}
       </div>
 
-      {/* Form */}
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-primary-600">{stats.total}</span>
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-sm font-medium text-secondary-500">Total</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-primary-600">{stats.new}</span>
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-sm font-medium text-secondary-500">Novos</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-warning-600">{stats.contacted}</span>
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-sm font-medium text-secondary-500">Contatados</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.converted}</span>
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-sm font-medium text-secondary-500">Convertidos</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.conversionRate}%</span>
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-sm font-medium text-secondary-500">Conversão</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Filters */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
+        transition={{ delay: 0.5 }}
         className="card"
       >
-        <form onSubmit={handleSubmit(onSubmit)} className="card-body space-y-6">
-          {/* Informações Básicas */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Informações Básicas
-            </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              <div>
-                <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Nome Completo *
-                </label>
-                <input
-                  type="text"
-                  id="full_name"
-                  {...register('full_name')}
-                  className={`input ${errors.full_name ? 'input-error' : ''}`}
-                  placeholder="Nome completo do lead"
-                />
-                {errors.full_name && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.full_name.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Telefone *
-                </label>
-                <input
-                  type="tel"
-                  id="phone"
-                  {...register('phone')}
-                  className={`input ${errors.phone ? 'input-error' : ''}`}
-                  placeholder="(11) 99999-9999"
-                />
-                {errors.phone && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.phone.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  {...register('email')}
-                  className={`input ${errors.email ? 'input-error' : ''}`}
-                  placeholder="email@exemplo.com"
-                />
-                {errors.email && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.email.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="cpf" className="block text-sm font-medium text-secondary-700 mb-2">
-                  CPF
-                </label>
-                <input
-                  type="text"
-                  id="cpf"
-                  {...register('cpf')}
-                  className="input"
-                  placeholder="000.000.000-00"
-                />
-              </div>
+        <div className="card-body">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="relative">
+              <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
+              <input
+                type="text"
+                placeholder="Buscar leads..."
+                className="input pl-10"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
             </div>
-          </div>
-
-          {/* Informações Pessoais */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Informações Pessoais
-            </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-              <div>
-                <label htmlFor="age" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Idade
-                </label>
-                <input
-                  type="number"
-                  id="age"
-                  {...register('age', { valueAsNumber: true })}
-                  className="input"
-                  placeholder="25"
-                  min="1"
-                  max="120"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="gender" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Gênero
-                </label>
-                <select
-                  id="gender"
-                  {...register('gender')}
-                  className="input"
-                >
-                  <option value="">Selecione</option>
-                  <option value="male">Masculino</option>
-                  <option value="female">Feminino</option>
-                  <option value="other">Outro</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Endereço */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Endereço
-            </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <label htmlFor="address" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Endereço
-                </label>
-                <input
-                  type="text"
-                  id="address"
-                  {...register('address')}
-                  className="input"
-                  placeholder="Rua, número, bairro"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="city" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Cidade
-                </label>
-                <input
-                  type="text"
-                  id="city"
-                  {...register('city')}
-                  className="input"
-                  placeholder="São Paulo"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="state" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Estado
-                </label>
-                <input
-                  type="text"
-                  id="state"
-                  {...register('state')}
-                  className="input"
-                  placeholder="SP"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="zip_code" className="block text-sm font-medium text-secondary-700 mb-2">
-                  CEP
-                </label>
-                <input
-                  type="text"
-                  id="zip_code"
-                  {...register('zip_code')}
-                  className="input"
-                  placeholder="00000-000"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Observações */}
-          <div>
-            <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
-              Observações
-            </label>
-            <textarea
-              id="notes"
-              {...register('notes')}
-              rows={4}
+            
+            <select
               className="input"
-              placeholder="Informações adicionais sobre o lead..."
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">Todos os status</option>
+              {statusOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            
+            <input
+              type="date"
+              className="input"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
             />
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
-            <Link
-              href="/dashboard/leads"
+            
+            <button
+              onClick={() => {
+                setSearchTerm('')
+                setStatusFilter('')
+                setDateFilter('')
+              }}
               className="btn btn-secondary"
             >
-              Cancelar
-            </Link>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="btn btn-primary"
-            >
-              {isSubmitting ? (
-                <>
-                  <div className="loading-spinner w-4 h-4 mr-2"></div>
-                  Salvando...
-                </>
-              ) : (
-                'Cadastrar Lead'
-              )}
+              <FunnelIcon className="h-4 w-4 mr-2" />
+              Limpar Filtros
             </button>
           </div>
-        </form>
+        </div>
       </motion.div>
+
+      {/* Leads Table */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.6 }}
+        className="card"
+      >
+        <div className="card-body p-0">
+          <div className="overflow-x-auto">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Lead</th>
+                  <th>Contato</th>
+                  <th>Status</th>
+                  {profile?.role !== 'consultant' && <th>Indicado por</th>}
+                  <th>Data</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLeads.map((lead) => (
+                  <tr key={lead.id}>
+                    <td>
+                      <div>
+                        <div className="font-medium text-secondary-900">
+                          {lead.full_name}
+                        </div>
+                        {lead.age && (
+                          <div className="text-sm text-secondary-500">
+                            {lead.age} anos
+                            {lead.gender && (
+                              <span className="ml-1">
+                                • {lead.gender === 'male' ? 'M' : lead.gender === 'female' ? 'F' : 'Outro'}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="space-y-1">
+                        <div className="flex items-center">
+                          <PhoneIcon className="h-3 w-3 text-secondary-400 mr-1" />
+                          <span className="text-sm">{lead.phone}</span>
+                        </div>
+                        {lead.email && (
+                          <div className="flex items-center">
+                            <EnvelopeIcon className="h-3 w-3 text-secondary-400 mr-1" />
+                            <span className="text-sm">{lead.email}</span>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      {canEdit ? (
+                        <select
+                          value={lead.status}
+                          onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
+                          disabled={updatingStatus === lead.id}
+                          className={`badge badge-${getStatusColor(lead.status)} cursor-pointer hover:opacity-80 border-0 text-xs`}
+                        >
+                          {statusOptions.map(option => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className={`badge badge-${getStatusColor(lead.status)} flex items-center`}>
+                          {getStatusIcon(lead.status)}
+                          <span className="ml-1">
+                            {statusOptions.find(opt => opt.value === lead.status)?.label}
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                    {profile?.role !== 'consultant' && (
+                      <td>
+                        <div className="text-sm text-secondary-900">
+                          {lead.users?.full_name}
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          {lead.users?.email}
+                        </div>
+                      </td>
+                    )}
+                    <td>
+                      <div className="text-sm text-secondary-900">
+                        {new Date(lead.created_at).toLocaleDateString('pt-BR')}
+                      </div>
+                      <div className="text-xs text-secondary-500">
+                        {new Date(lead.created_at).toLocaleTimeString('pt-BR', { 
+                          hour: '2-digit', 
+                          minute: '2-digit' 
+                        })}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => handleViewLead(lead.id)}
+                          className="btn btn-ghost btn-sm"
+                          title="Visualizar"
+                        >
+                          <EyeIcon className="h-4 w-4" />
+                        </button>
+                        {canEdit && (
+                          <Link
+                            href={`/dashboard/leads/${lead.id}/edit`}
+                            className="btn btn-ghost btn-sm"
+                            title="Editar"
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </Link>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            
+            {filteredLeads.length === 0 && (
+              <div className="text-center py-12">
+                <div className="text-secondary-400 mb-4">
+                  {leads.length === 0 ? (
+                    <ClockIcon className="mx-auto h-12 w-12" />
+                  ) : (
+                    <MagnifyingGlassIcon className="mx-auto h-12 w-12" />
+                  )}
+                </div>
+                <h3 className="text-sm font-medium text-secondary-900 mb-1">
+                  {leads.length === 0 ? 'Nenhum lead encontrado' : 'Nenhum resultado encontrado'}
+                </h3>
+                <p className="text-sm text-secondary-500">
+                  {leads.length === 0 
+                    ? 'Comece criando seu primeiro lead.'
+                    : 'Tente ajustar os filtros ou termo de busca.'
+                  }
+                </p>
+                {leads.length === 0 && canCreate && (
+                  <Link
+                    href="/dashboard/leads/new"
+                    className="btn btn-primary mt-4"
+                  >
+                    <PlusIcon className="h-4 w-4 mr-2" />
+                    Criar Primeiro Lead
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Lead Detail Modal */}
+      <LeadDetailModal
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        leadId={selectedLeadId}
+        onLeadUpdate={fetchLeads}
+      />
     </div>
   )
 }
