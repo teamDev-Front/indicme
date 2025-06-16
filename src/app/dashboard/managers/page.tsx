@@ -16,12 +16,15 @@ import {
   PencilIcon,
   TrashIcon,
   ExclamationTriangleIcon,
+  UsersIcon,
+  CurrencyDollarIcon,
+  ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 
-interface Consultant {
+interface Manager {
   id: string
   email: string
   full_name: string
@@ -31,51 +34,42 @@ interface Consultant {
   created_at: string
   updated_at: string
   _count?: {
+    consultants: number
     leads: number
     commissions: number
   }
-  manager?: {
-    id: string
-    full_name: string
+  _stats?: {
+    totalCommissions: number
+    conversionRate: number
   }
 }
 
-interface Manager {
-  id: string
-  full_name: string
-  email: string
-}
-
-export default function ConsultantsPage() {
+export default function ManagersPage() {
   const { profile } = useAuth()
-  const [consultants, setConsultants] = useState<Consultant[]>([])
   const [managers, setManagers] = useState<Manager[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null)
+  const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [formData, setFormData] = useState({
     full_name: '',
     email: '',
     phone: '',
-    manager_id: '',
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
   const supabase = createClient()
 
   useEffect(() => {
-    if (profile && (profile.role === 'clinic_admin' || profile.role === 'clinic_viewer' || profile.role === 'manager')) {
-      fetchConsultants()
-      if (profile.role !== 'manager') {
-        fetchManagers()
-      }
+    if (profile && (profile.role === 'clinic_admin' || profile.role === 'clinic_viewer')) {
+      fetchManagers()
     }
   }, [profile])
 
-  const fetchConsultants = async () => {
+  const fetchManagers = async () => {
     try {
       setLoading(true)
 
@@ -88,112 +82,105 @@ export default function ConsultantsPage() {
 
       if (!userClinic) return
 
-      let consultantsQuery = supabase
+      const { data: managersData, error } = await supabase
         .from('users')
         .select(`
           *,
           user_clinics!inner(clinic_id)
         `)
         .eq('user_clinics.clinic_id', userClinic.clinic_id)
-        .in('role', ['consultant', 'manager'])
+        .eq('role', 'manager')
         .order('created_at', { ascending: false })
-
-      // Se for manager, mostrar apenas consultores da sua equipe
-      if (profile?.role === 'manager') {
-        const { data: hierarchy } = await supabase
-          .from('hierarchies')
-          .select('consultant_id')
-          .eq('manager_id', profile.id)
-
-        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-        if (consultantIds.length > 0) {
-          consultantsQuery = consultantsQuery.in('id', consultantIds)
-        } else {
-          setConsultants([])
-          setLoading(false)
-          return
-        }
-      }
-
-      const { data: consultantsData, error } = await consultantsQuery
 
       if (error) throw error
 
-      // Buscar estatísticas de leads e comissões para cada consultor
-      const consultantsWithStats = await Promise.all(
-        (consultantsData || []).map(async (consultant) => {
-          const [leadsCount, commissionsCount, managerData] = await Promise.all([
-            supabase
-              .from('leads')
-              .select('id', { count: 'exact' })
-              .eq('indicated_by', consultant.id),
-            supabase
-              .from('commissions')
-              .select('id', { count: 'exact' })
-              .eq('user_id', consultant.id)
-              .eq('status', 'paid'),
-            supabase
-              .from('hierarchies')
-              .select(`
-                manager:manager_id (
-                  id,
-                  full_name
-                )
-              `)
-              .eq('consultant_id', consultant.id)
-              .single()
-          ])
+      // Buscar estatísticas para cada gerente
+      const managersWithStats = await Promise.all(
+        (managersData || []).map(async (manager) => {
+          try {
+            const [consultantsResult, leadsResult, commissionsResult] = await Promise.all([
+              // Contar consultores sob este gerente
+              supabase
+                .from('hierarchies')
+                .select('consultant_id', { count: 'exact' })
+                .eq('manager_id', manager.id),
 
-          return {
-            ...consultant,
-            _count: {
-              leads: leadsCount.count || 0,
-              commissions: commissionsCount.count || 0,
-            },
-            manager: managerData.data?.manager || null
+              // Contar leads usando a função SQL
+              supabase.rpc('get_manager_leads_count', { manager_user_id: manager.id }),
+
+              // Buscar comissões pagas deste gerente
+              supabase
+                .from('commissions')
+                .select('amount, status')
+                .eq('user_id', manager.id)
+            ])
+
+            // Verificar se os resultados são válidos
+            const consultantsCount = consultantsResult?.count || 0
+            const leadsCount = typeof leadsResult?.data === 'number' ? leadsResult.data : 0
+            const commissionsData = commissionsResult?.data || []
+
+            const totalCommissions = commissionsData
+              .filter(c => c?.status === 'paid')
+              .reduce((sum, c) => sum + (c?.amount || 0), 0)
+
+            return {
+              ...manager,
+              _count: {
+                consultants: consultantsCount,
+                leads: leadsCount,
+                commissions: commissionsData.filter(c => c?.status === 'paid').length,
+              },
+              _stats: {
+                totalCommissions,
+                conversionRate: 0, // Placeholder por enquanto
+              }
+            }
+          } catch (statsError) {
+            console.error('Erro ao buscar estatísticas para gerente:', manager.id, statsError)
+            return {
+              ...manager,
+              _count: {
+                consultants: 0,
+                leads: 0,
+                commissions: 0,
+              },
+              _stats: {
+                totalCommissions: 0,
+                conversionRate: 0,
+              }
+            }
           }
         })
       )
 
-      setConsultants(consultantsWithStats)
+      setManagers(managersWithStats)
     } catch (error: any) {
-      console.error('Erro ao buscar consultores:', error)
-      toast.error('Erro ao carregar consultores')
+      console.error('Erro ao buscar gerentes:', error)
+      toast.error('Erro ao carregar gerentes')
     } finally {
       setLoading(false)
     }
   }
 
-  const fetchManagers = async () => {
-    try {
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) return
-
-      const { data, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id)
-        `)
-        .eq('user_clinics.clinic_id', userClinic.clinic_id)
-        .eq('role', 'manager')
-        .eq('status', 'active')
-
-      if (error) throw error
-      setManagers(data || [])
-    } catch (error: any) {
-      console.error('Erro ao buscar managers:', error)
+  const handleOpenModal = (mode: 'create' | 'edit', manager?: Manager) => {
+    setModalMode(mode)
+    if (mode === 'edit' && manager) {
+      setSelectedManager(manager)
+      setFormData({
+        full_name: manager.full_name,
+        email: manager.email,
+        phone: manager.phone || '',
+        password: '', // Não mostrar senha existente
+      })
+    } else {
+      setSelectedManager(null)
+      setFormData({ full_name: '', email: '', phone: '', password: '' })
     }
+    setIsModalOpen(true)
   }
 
-  const handleCreateConsultant = async () => {
+  const handleSubmit = async () => {
     try {
       setSubmitting(true)
 
@@ -206,124 +193,124 @@ export default function ConsultantsPage() {
 
       if (!userClinic) throw new Error('Clínica não encontrada')
 
-      console.log('Criando consultor com dados:', formData)
+      if (modalMode === 'create') {
+        console.log('Criando gerente com dados:', formData)
 
-      // 1. Fazer signup normal
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          data: {
-            full_name: formData.full_name,
+        // 1. Fazer signup normal (isso sempre funciona)
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+          options: {
+            data: {
+              full_name: formData.full_name,
+            }
           }
-        }
-      })
+        })
 
-      console.log('Resultado do signUp consultor:', { signUpData, signUpError })
+        console.log('Resultado do signUp:', { signUpData, signUpError })
 
-      if (signUpError) {
-        throw new Error(`Erro no cadastro: ${signUpError.message}`)
-      }
-
-      if (signUpData.user) {
-        console.log('Consultor criado no auth, ID:', signUpData.user.id)
-
-        // 2. Aguardar um pouco
-        await new Promise(resolve => setTimeout(resolve, 1000))
-
-        // 3. Criar perfil do consultor
-        const { error: profileError } = await supabase
-          .from('users')
-          .upsert({
-            id: signUpData.user.id,
-            email: formData.email,
-            full_name: formData.full_name,
-            phone: formData.phone || null,
-            role: 'consultant',
-            status: 'active',
-          }, {
-            onConflict: 'id',
-            ignoreDuplicates: false
-          })
-
-        console.log('Resultado do perfil consultor:', profileError)
-
-        if (profileError) {
-          throw new Error(`Erro ao criar perfil: ${profileError.message}`)
+        if (signUpError) {
+          throw new Error(`Erro no cadastro: ${signUpError.message}`)
         }
 
-        // 4. Associar à clínica
-        const { error: clinicError } = await supabase
-          .from('user_clinics')
-          .upsert({
-            user_id: signUpData.user.id,
-            clinic_id: userClinic.clinic_id,
-          }, {
-            onConflict: 'user_id,clinic_id',
-            ignoreDuplicates: true
-          })
+        if (signUpData.user) {
+          console.log('Usuário criado no auth, ID:', signUpData.user.id)
 
-        console.log('Associação à clínica consultor:', clinicError)
+          // 2. Aguardar um pouco para garantir que o usuário foi criado
+          await new Promise(resolve => setTimeout(resolve, 1000))
 
-        if (clinicError) {
-          throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
-        }
-
-        // 5. Se tem manager, criar hierarquia
-        if (formData.manager_id) {
-          const { error: hierarchyError } = await supabase
-            .from('hierarchies')
+          // 3. Criar/atualizar perfil na tabela users
+          const { error: upsertError } = await supabase
+            .from('users')
             .upsert({
-              manager_id: formData.manager_id,
-              consultant_id: signUpData.user.id,
-              clinic_id: userClinic.clinic_id,
+              id: signUpData.user.id,
+              email: formData.email,
+              full_name: formData.full_name,
+              phone: formData.phone || null,
+              role: 'manager',
+              status: 'active',
             }, {
-              onConflict: 'consultant_id,clinic_id',
+              onConflict: 'id',
               ignoreDuplicates: false
             })
 
-          console.log('Criação de hierarquia:', hierarchyError)
+          console.log('Resultado do upsert profile:', upsertError)
 
-          if (hierarchyError) {
-            console.warn('Erro na hierarquia (não crítico):', hierarchyError.message)
-            // Não para o processo por causa da hierarquia
+          if (upsertError) {
+            throw new Error(`Erro ao criar perfil: ${upsertError.message}`)
           }
+
+          // 4. Associar à clínica
+          const { error: clinicError } = await supabase
+            .from('user_clinics')
+            .upsert({
+              user_id: signUpData.user.id,
+              clinic_id: userClinic.clinic_id,
+            }, {
+              onConflict: 'user_id,clinic_id',
+              ignoreDuplicates: true
+            })
+
+          console.log('Resultado da associação à clínica:', clinicError)
+
+          if (clinicError) {
+            throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
+          }
+
+          toast.success('Gerente criado com sucesso! Ele receberá um email de confirmação.')
+        } else {
+          throw new Error('Usuário não foi criado corretamente')
         }
 
-        toast.success('Consultor criado com sucesso! Ele receberá um email de confirmação.')
       } else {
-        throw new Error('Usuário não foi criado corretamente')
+        // EDIÇÃO (mantém igual)
+        if (!selectedManager) return
+
+        const updateData: any = {
+          full_name: formData.full_name,
+          phone: formData.phone || null,
+          updated_at: new Date().toISOString()
+        }
+
+        const { error: profileError } = await supabase
+          .from('users')
+          .update(updateData)
+          .eq('id', selectedManager.id)
+
+        if (profileError) throw profileError
+
+        toast.success('Gerente atualizado com sucesso!')
       }
 
       setIsModalOpen(false)
-      setFormData({ full_name: '', email: '', phone: '', manager_id: '', password: '' })
+      setFormData({ full_name: '', email: '', phone: '', password: '' })
 
-      // Aguardar antes de recarregar
+      // Aguardar um pouco antes de recarregar para garantir que os dados foram salvos
       setTimeout(() => {
-        fetchConsultants()
+        fetchManagers()
       }, 1500)
 
     } catch (error: any) {
-      console.error('Erro completo ao criar consultor:', error)
-      toast.error(error.message || 'Erro ao criar consultor')
+      console.error('Erro completo ao salvar gerente:', error)
+      toast.error(error.message || 'Erro ao salvar gerente')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const handleStatusChange = async (consultantId: string, newStatus: string) => {
+  const handleStatusChange = async (managerId: string, newStatus: string) => {
     try {
       const { error } = await supabase
         .from('users')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', consultantId)
+        .eq('id', managerId)
 
       if (error) throw error
 
-      setConsultants(prev => prev.map(consultant =>
-        consultant.id === consultantId
-          ? { ...consultant, status: newStatus as any }
-          : consultant
+      setManagers(prev => prev.map(manager =>
+        manager.id === managerId
+          ? { ...manager, status: newStatus as any }
+          : manager
       ))
 
       toast.success('Status atualizado com sucesso!')
@@ -333,43 +320,57 @@ export default function ConsultantsPage() {
     }
   }
 
-  const handleDeleteConsultant = async () => {
-    if (!selectedConsultant) return
+  const handleDeleteManager = async () => {
+    if (!selectedManager) return
 
     try {
       setSubmitting(true)
 
+      // Verificar se o gerente tem consultores associados
+      const { data: hierarchies, error: hierarchyError } = await supabase
+        .from('hierarchies')
+        .select('consultant_id')
+        .eq('manager_id', selectedManager.id)
+
+      if (hierarchyError) throw hierarchyError
+
+      if (hierarchies && hierarchies.length > 0) {
+        toast.error('Não é possível excluir um gerente que possui consultores associados. Remova os consultores primeiro.')
+        return
+      }
+
       // Deletar usuário do auth
-      const { error: authError } = await supabase.auth.admin.deleteUser(selectedConsultant.id)
+      const { error: authError } = await supabase.auth.admin.deleteUser(selectedManager.id)
       if (authError) throw authError
 
-      toast.success('Consultor removido com sucesso!')
+      toast.success('Gerente removido com sucesso!')
       setIsDeleteModalOpen(false)
-      setSelectedConsultant(null)
-      fetchConsultants()
+      setSelectedManager(null)
+      fetchManagers()
     } catch (error: any) {
-      console.error('Erro ao deletar consultor:', error)
-      toast.error('Erro ao remover consultor')
+      console.error('Erro ao deletar gerente:', error)
+      toast.error('Erro ao remover gerente')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const filteredConsultants = consultants.filter(consultant => {
+  const filteredManagers = managers.filter(manager => {
     const matchesSearch = !searchTerm ||
-      consultant.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      consultant.email.toLowerCase().includes(searchTerm.toLowerCase())
+      manager.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      manager.email.toLowerCase().includes(searchTerm.toLowerCase())
 
-    const matchesStatus = !statusFilter || consultant.status === statusFilter
+    const matchesStatus = !statusFilter || manager.status === statusFilter
 
     return matchesSearch && matchesStatus
   })
 
   const stats = {
-    total: consultants.length,
-    active: consultants.filter(c => c.status === 'active').length,
-    inactive: consultants.filter(c => c.status === 'inactive').length,
-    totalLeads: consultants.reduce((sum, c) => sum + (c._count?.leads || 0), 0),
+    total: managers.length,
+    active: managers.filter(m => m.status === 'active').length,
+    inactive: managers.filter(m => m.status === 'inactive').length,
+    totalConsultants: managers.reduce((sum, m) => sum + (m._count?.consultants || 0), 0),
+    totalCommissions: managers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0),
   }
 
   const canEdit = profile?.role === 'clinic_admin'
@@ -382,35 +383,44 @@ export default function ConsultantsPage() {
     )
   }
 
+  if (profile?.role !== 'clinic_admin' && profile?.role !== 'clinic_viewer') {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-warning-400 mb-4" />
+          <h3 className="text-lg font-medium text-secondary-900 mb-2">Acesso Restrito</h3>
+          <p className="text-secondary-500">
+            Apenas administradores da clínica podem acessar esta página.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-secondary-900">
-            {profile?.role === 'manager' ? 'Minha Equipe' : 'Consultores'}
-          </h1>
+          <h1 className="text-2xl font-bold text-secondary-900">Gerentes</h1>
           <p className="text-secondary-600">
-            {profile?.role === 'manager'
-              ? 'Gerencie sua equipe de consultores'
-              : 'Gerencie todos os consultores da clínica'
-            }
+            Gerencie todos os gerentes da clínica
           </p>
         </div>
 
         {canEdit && (
           <button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => handleOpenModal('create')}
             className="btn btn-primary"
           >
             <UserPlusIcon className="h-4 w-4 mr-2" />
-            Novo Consultor
+            Novo Gerente
           </button>
         )}
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -459,12 +469,12 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-danger-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-danger-600">{stats.inactive}</span>
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-warning-600">{stats.totalConsultants}</span>
                 </div>
               </div>
               <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Inativos</p>
+                <p className="text-sm font-medium text-secondary-500">Consultores</p>
               </div>
             </div>
           </div>
@@ -479,12 +489,38 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-primary-600">{stats.totalLeads}</span>
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <CurrencyDollarIcon className="w-4 h-4 text-success-600" />
                 </div>
               </div>
               <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Total Leads</p>
+                <p className="text-xs font-medium text-secondary-500">Comissões Pagas</p>
+                <p className="text-sm font-bold text-success-600">
+                  R$ {stats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <ArrowTrendingUpIcon className="w-4 h-4 text-primary-600" />
+                </div>
+              </div>
+              <div className="ml-5">
+                <p className="text-xs font-medium text-secondary-500">Performance</p>
+                <p className="text-sm font-bold text-primary-600">
+                  {stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(1) : 0}%
+                </p>
               </div>
             </div>
           </div>
@@ -495,7 +531,7 @@ export default function ConsultantsPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
+        transition={{ delay: 0.5 }}
         className="card"
       >
         <div className="card-body">
@@ -504,7 +540,7 @@ export default function ConsultantsPage() {
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar consultores..."
+                placeholder="Buscar gerentes..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -535,11 +571,11 @@ export default function ConsultantsPage() {
         </div>
       </motion.div>
 
-      {/* Consultants Table */}
+      {/* Managers Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
+        transition={{ delay: 0.6 }}
         className="card"
       >
         <div className="card-body p-0">
@@ -547,32 +583,32 @@ export default function ConsultantsPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Consultor</th>
-                  <th>Contato</th>
                   <th>Gerente</th>
+                  <th>Contato</th>
+                  <th>Equipe</th>
                   <th>Performance</th>
                   <th>Status</th>
                   <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredConsultants.map((consultant) => (
-                  <tr key={consultant.id}>
+                {filteredManagers.map((manager) => (
+                  <tr key={manager.id}>
                     <td>
                       <div className="flex items-center">
                         <div className="flex-shrink-0 h-10 w-10">
                           <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center">
                             <span className="text-sm font-medium text-white">
-                              {consultant.full_name.charAt(0).toUpperCase()}
+                              {manager.full_name.charAt(0).toUpperCase()}
                             </span>
                           </div>
                         </div>
                         <div className="ml-4">
                           <div className="text-sm font-medium text-secondary-900">
-                            {consultant.full_name}
+                            {manager.full_name}
                           </div>
                           <div className="text-sm text-secondary-500">
-                            Desde {new Date(consultant.created_at).toLocaleDateString('pt-BR')}
+                            Desde {new Date(manager.created_at).toLocaleDateString('pt-BR')}
                           </div>
                         </div>
                       </div>
@@ -581,64 +617,66 @@ export default function ConsultantsPage() {
                       <div className="space-y-1">
                         <div className="flex items-center text-sm">
                           <EnvelopeIcon className="h-3 w-3 text-secondary-400 mr-1" />
-                          {consultant.email}
+                          {manager.email}
                         </div>
-                        {consultant.phone && (
+                        {manager.phone && (
                           <div className="flex items-center text-sm">
                             <PhoneIcon className="h-3 w-3 text-secondary-400 mr-1" />
-                            {consultant.phone}
+                            {manager.phone}
                           </div>
                         )}
                       </div>
                     </td>
                     <td>
-                      {consultant.manager ? (
-                        <div className="flex items-center">
-                          <BuildingOfficeIcon className="h-4 w-4 text-secondary-400 mr-2" />
-                          <span className="text-sm">{consultant.manager.full_name}</span>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-secondary-500">Sem manager</span>
-                      )}
-                    </td>
-                    <td>
                       <div className="flex items-center space-x-4">
                         <div className="text-center">
                           <div className="text-sm font-medium text-secondary-900">
-                            {consultant._count?.leads || 0}
+                            {manager._count?.consultants || 0}
                           </div>
-                          <div className="text-xs text-secondary-500">Leads</div>
+                          <div className="text-xs text-secondary-500">Consultores</div>
                         </div>
                         <div className="text-center">
                           <div className="text-sm font-medium text-secondary-900">
-                            {consultant._count?.commissions || 0}
+                            {manager._count?.leads || 0}
                           </div>
-                          <div className="text-xs text-secondary-500">Comissões</div>
+                          <div className="text-xs text-secondary-500">Leads</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="space-y-1">
+                        <div className="text-sm font-medium text-success-600">
+                          R$ {(manager._stats?.totalCommissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          {manager._count?.commissions || 0} comissões pagas
                         </div>
                       </div>
                     </td>
                     <td>
                       {canEdit ? (
                         <select
-                          value={consultant.status}
-                          onChange={(e) => handleStatusChange(consultant.id, e.target.value)}
-                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${consultant.status === 'active' ? 'badge-success' :
-                              consultant.status === 'inactive' ? 'badge-danger' :
-                                'badge-warning'
-                            }`}
+                          value={manager.status}
+                          onChange={(e) => handleStatusChange(manager.id, e.target.value)}
+                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${
+                            manager.status === 'active' ? 'badge-success' :
+                            manager.status === 'inactive' ? 'badge-danger' :
+                            'badge-warning'
+                          }`}
                         >
                           <option value="active">Ativo</option>
                           <option value="inactive">Inativo</option>
                           <option value="pending">Pendente</option>
                         </select>
                       ) : (
-                        <span className={`badge ${consultant.status === 'active' ? 'badge-success' :
-                            consultant.status === 'inactive' ? 'badge-danger' :
-                              'badge-warning'
-                          }`}>
-                          {consultant.status === 'active' ? 'Ativo' :
-                            consultant.status === 'inactive' ? 'Inativo' :
-                              'Pendente'}
+                        <span className={`badge ${
+                          manager.status === 'active' ? 'badge-success' :
+                          manager.status === 'inactive' ? 'badge-danger' :
+                          'badge-warning'
+                        }`}>
+                          {manager.status === 'active' ? 'Ativo' :
+                           manager.status === 'inactive' ? 'Inativo' :
+                           'Pendente'}
                         </span>
                       )}
                     </td>
@@ -653,6 +691,7 @@ export default function ConsultantsPage() {
                         {canEdit && (
                           <>
                             <button
+                              onClick={() => handleOpenModal('edit', manager)}
                               className="btn btn-ghost btn-sm"
                               title="Editar"
                             >
@@ -660,7 +699,7 @@ export default function ConsultantsPage() {
                             </button>
                             <button
                               onClick={() => {
-                                setSelectedConsultant(consultant)
+                                setSelectedManager(manager)
                                 setIsDeleteModalOpen(true)
                               }}
                               className="btn btn-ghost btn-sm text-danger-600 hover:text-danger-700"
@@ -677,25 +716,25 @@ export default function ConsultantsPage() {
               </tbody>
             </table>
 
-            {filteredConsultants.length === 0 && (
+            {filteredManagers.length === 0 && (
               <div className="text-center py-12">
-                <UserPlusIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
+                <BuildingOfficeIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
                 <h3 className="text-sm font-medium text-secondary-900 mb-1">
-                  {consultants.length === 0 ? 'Nenhum consultor encontrado' : 'Nenhum resultado encontrado'}
+                  {managers.length === 0 ? 'Nenhum gerente encontrado' : 'Nenhum resultado encontrado'}
                 </h3>
                 <p className="text-sm text-secondary-500">
-                  {consultants.length === 0
-                    ? 'Comece adicionando seu primeiro consultor.'
+                  {managers.length === 0
+                    ? 'Comece adicionando seu primeiro gerente.'
                     : 'Tente ajustar os filtros ou termo de busca.'
                   }
                 </p>
-                {consultants.length === 0 && canEdit && (
+                {managers.length === 0 && canEdit && (
                   <button
-                    onClick={() => setIsModalOpen(true)}
+                    onClick={() => handleOpenModal('create')}
                     className="btn btn-primary mt-4"
                   >
                     <UserPlusIcon className="h-4 w-4 mr-2" />
-                    Adicionar Primeiro Consultor
+                    Adicionar Primeiro Gerente
                   </button>
                 )}
               </div>
@@ -704,7 +743,7 @@ export default function ConsultantsPage() {
         </div>
       </motion.div>
 
-      {/* Create Consultant Modal */}
+      {/* Create/Edit Manager Modal */}
       <Transition appear show={isModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
           <Transition.Child
@@ -732,33 +771,20 @@ export default function ConsultantsPage() {
               >
                 <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                   <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
-                    Novo Consultor
+                    {modalMode === 'create' ? 'Novo Gerente' : 'Editar Gerente'}
                   </Dialog.Title>
 
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Nome Completo
+                        Nome
                       </label>
                       <input
                         type="text"
                         className="input"
                         value={formData.full_name}
                         onChange={(e) => setFormData(prev => ({ ...prev, full_name: e.target.value }))}
-                        placeholder="Nome completo do consultor"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        className="input"
-                        value={formData.email}
-                        onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                        placeholder="email@exemplo.com"
+                        placeholder="John Doe"
                       />
                     </div>
 
@@ -777,36 +803,29 @@ export default function ConsultantsPage() {
 
                     <div>
                       <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Senha Temporária
+                        Email
+                      </label>
+                      <input
+                        type="email"
+                        className="input"
+                        value={formData.email}
+                        onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                        placeholder="VcY9d@example.com"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        {modalMode === 'create' ? 'Senha' : 'Nova Senha (opcional)'}
                       </label>
                       <input
                         type="password"
                         className="input"
                         value={formData.password}
                         onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                        placeholder="Mínimo 6 caracteres"
+                        placeholder={modalMode === 'create' ? 'Mínimo 6 caracteres' : 'Deixe em branco para manter a atual'}
                       />
                     </div>
-
-                    {managers.length > 0 && (
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Gerente (Opcional)
-                        </label>
-                        <select
-                          className="input"
-                          value={formData.manager_id}
-                          onChange={(e) => setFormData(prev => ({ ...prev, manager_id: e.target.value }))}
-                        >
-                          <option value="">Selecione um gerente</option>
-                          {managers.map(manager => (
-                            <option key={manager.id} value={manager.id}>
-                              {manager.full_name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
                   </div>
 
                   <div className="mt-6 flex justify-end space-x-3">
@@ -820,16 +839,21 @@ export default function ConsultantsPage() {
                     <button
                       type="button"
                       className="btn btn-primary"
-                      onClick={handleCreateConsultant}
-                      disabled={submitting || !formData.full_name || !formData.email || !formData.password}
+                      onClick={handleSubmit}
+                      disabled={
+                        submitting ||
+                        !formData.full_name ||
+                        !formData.email ||
+                        (modalMode === 'create' && !formData.password)
+                      }
                     >
                       {submitting ? (
                         <>
                           <div className="loading-spinner w-4 h-4 mr-2"></div>
-                          Criando...
+                          {modalMode === 'create' ? 'Criando...' : 'Salvando...'}
                         </>
                       ) : (
-                        'Criar Consultor'
+                        modalMode === 'create' ? 'Criar Gerente' : 'Salvar Alterações'
                       )}
                     </button>
                   </div>
@@ -875,9 +899,15 @@ export default function ConsultantsPage() {
                   </div>
 
                   <p className="text-sm text-secondary-500 mb-6">
-                    Tem certeza que deseja remover o consultor <strong>{selectedConsultant?.full_name}</strong>?
+                    Tem certeza que deseja remover o gerente <strong>{selectedManager?.full_name}</strong>?
                     Esta ação não pode ser desfeita e todos os dados relacionados serão perdidos.
                   </p>
+
+                  <div className="bg-warning-50 border border-warning-200 rounded-lg p-3 mb-4">
+                    <p className="text-sm text-warning-700">
+                      <strong>Atenção:</strong> Certifique-se de que este gerente não possui consultores associados antes de excluir.
+                    </p>
+                  </div>
 
                   <div className="flex justify-end space-x-3">
                     <button
@@ -890,7 +920,7 @@ export default function ConsultantsPage() {
                     <button
                       type="button"
                       className="btn btn-danger"
-                      onClick={handleDeleteConsultant}
+                      onClick={handleDeleteManager}
                       disabled={submitting}
                     >
                       {submitting ? (
@@ -899,7 +929,7 @@ export default function ConsultantsPage() {
                           Removendo...
                         </>
                       ) : (
-                        'Remover Consultor'
+                        'Remover Gerente'
                       )}
                     </button>
                   </div>
