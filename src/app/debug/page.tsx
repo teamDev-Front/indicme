@@ -104,7 +104,7 @@ const testDirectAPI = async () => {
           <div>
             <p className="font-semibold">Verificar variáveis:</p>
             <code className="block bg-gray-800 text-green-400 p-2 rounded">
-              console.log('URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
+              console.log(&apos;URL:&apos;, process.env.NEXT_PUBLIC_SUPABASE_URL)
             </code>
           </div>
           
