@@ -66,7 +66,7 @@ const testDirectAPI = async () => {
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-8">Debug Supabase</h1>
-      // E adicione este botão no JSX:
+     
 <button 
   onClick={testDirectAPI}
   className="mt-2 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
@@ -103,9 +103,7 @@ const testDirectAPI = async () => {
         <div className="space-y-4 text-sm font-mono">
           <div>
             <p className="font-semibold">Verificar variáveis:</p>
-            <code className="block bg-gray-800 text-green-400 p-2 rounded">
-              console.log(&apos;URL:&apos;, process.env.NEXT_PUBLIC_SUPABASE_URL)
-            </code>
+            
           </div>
           
           <div>
