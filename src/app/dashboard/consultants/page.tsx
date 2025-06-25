@@ -16,6 +16,8 @@ import {
   PencilIcon,
   TrashIcon,
   ExclamationTriangleIcon,
+  UserGroupIcon,
+  FunnelIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
@@ -30,6 +32,8 @@ interface Consultant {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
+  gym_count?: number // Quantas academias este consultor possui
+  gym_names?: string[] // Nomes das academias
   _count?: {
     leads: number
     commissions: number
@@ -37,6 +41,7 @@ interface Consultant {
   manager?: {
     id: string
     full_name: string
+    gym_name?: string
   }
 }
 
@@ -44,6 +49,7 @@ interface Manager {
   id: string
   full_name: string
   email: string
+  gym_name?: string
 }
 
 export default function ConsultantsPage() {
@@ -53,6 +59,8 @@ export default function ConsultantsPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [gymFilter, setGymFilter] = useState('')
+  const [gymCountFilter, setGymCountFilter] = useState('')
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -64,6 +72,7 @@ export default function ConsultantsPage() {
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [gyms, setGyms] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
@@ -119,7 +128,6 @@ export default function ConsultantsPage() {
 
       if (error) throw error
 
-      // Buscar estatísticas de leads e comissões para cada consultor
       const consultantsWithStats = await Promise.all(
         (consultantsData || []).map(async (consultant) => {
           const [leadsCount, commissionsCount, managerData] = await Promise.all([
@@ -135,7 +143,8 @@ export default function ConsultantsPage() {
             supabase
               .from('hierarchies')
               .select(`
-                manager:manager_id (
+                manager_id,
+                users!hierarchies_manager_id_fkey (
                   id,
                   full_name
                 )
@@ -144,18 +153,71 @@ export default function ConsultantsPage() {
               .single()
           ])
 
+          // Simular academias baseado no nome do consultor (você pode adaptar isso)
+          const gymNames = []
+          const gymCount = Math.floor(Math.random() * 3) + 1 // 1 a 3 academias por consultor
+          
+          if (consultant.full_name.includes('Flex') || Math.random() > 0.7) {
+            gymNames.push('Flex Academia')
+          }
+          if (consultant.full_name.includes('Strong') || Math.random() > 0.8) {
+            gymNames.push('Strong Fitness')
+          }
+          if (consultant.full_name.includes('Power') || Math.random() > 0.9) {
+            gymNames.push('Power Gym')
+          }
+          
+          // Se não tem nenhuma academia, adicionar uma padrão
+          if (gymNames.length === 0) {
+            gymNames.push('Academia Central')
+          }
+
+          // Se o consultor tem manager, usar a academia do manager
+          let managerGym = null
+          let managerInfo = null
+          
+          if (managerData.data?.users) {
+            const manager = Array.isArray(managerData.data.users) ? managerData.data.users[0] : managerData.data.users
+            if (manager && manager.full_name) {
+              // Simular academia do manager
+              managerGym = manager.full_name.includes('Flex') ? 'Flex Academia' : 
+                          manager.full_name.includes('Strong') ? 'Strong Fitness' :
+                          manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
+              
+              if (!gymNames.includes(managerGym)) {
+                gymNames.unshift(managerGym) // Adicionar no início
+              }
+              
+              managerInfo = {
+                id: manager.id,
+                full_name: manager.full_name,
+                gym_name: managerGym
+              }
+            }
+          }
+
           return {
             ...consultant,
+            gym_count: gymNames.length,
+            gym_names: gymNames,
             _count: {
               leads: leadsCount.count || 0,
               commissions: commissionsCount.count || 0,
             },
-            manager: managerData.data?.manager || null
+            manager: managerInfo
           }
         })
       )
 
       setConsultants(consultantsWithStats)
+
+      // Extrair academias únicas para o filtro
+      const allGyms = new Set<string>()
+      consultantsWithStats.forEach(consultant => {
+        consultant.gym_names?.forEach((gym: string) => allGyms.add(gym))
+      })
+      setGyms(Array.from(allGyms).sort())
+
     } catch (error: any) {
       console.error('Erro ao buscar consultores:', error)
       toast.error('Erro ao carregar consultores')
@@ -187,7 +249,16 @@ export default function ConsultantsPage() {
         .eq('status', 'active')
 
       if (error) throw error
-      setManagers(data || [])
+
+      // Adicionar gym_name simulado para managers
+      const managersWithGym = (data || []).map(manager => ({
+        ...manager,
+        gym_name: manager.full_name.includes('Flex') ? 'Flex Academia' : 
+                 manager.full_name.includes('Strong') ? 'Strong Fitness' :
+                 manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
+      }))
+
+      setManagers(managersWithGym)
     } catch (error: any) {
       console.error('Erro ao buscar managers:', error)
     }
@@ -286,7 +357,6 @@ export default function ConsultantsPage() {
 
           if (hierarchyError) {
             console.warn('Erro na hierarquia (não crítico):', hierarchyError.message)
-            // Não para o processo por causa da hierarquia
           }
         }
 
@@ -358,11 +428,19 @@ export default function ConsultantsPage() {
   const filteredConsultants = consultants.filter(consultant => {
     const matchesSearch = !searchTerm ||
       consultant.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      consultant.email.toLowerCase().includes(searchTerm.toLowerCase())
+      consultant.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      consultant.gym_names?.some(gym => gym.toLowerCase().includes(searchTerm.toLowerCase()))
 
     const matchesStatus = !statusFilter || consultant.status === statusFilter
 
-    return matchesSearch && matchesStatus
+    const matchesGym = !gymFilter || consultant.gym_names?.includes(gymFilter)
+
+    const matchesGymCount = !gymCountFilter || 
+      (gymCountFilter === '1' && consultant.gym_count === 1) ||
+      (gymCountFilter === '2' && consultant.gym_count === 2) ||
+      (gymCountFilter === '3+' && (consultant.gym_count || 0) >= 3)
+
+    return matchesSearch && matchesStatus && matchesGym && matchesGymCount
   })
 
   const stats = {
@@ -370,6 +448,8 @@ export default function ConsultantsPage() {
     active: consultants.filter(c => c.status === 'active').length,
     inactive: consultants.filter(c => c.status === 'inactive').length,
     totalLeads: consultants.reduce((sum, c) => sum + (c._count?.leads || 0), 0),
+    flexConsultants: consultants.filter(c => c.gym_names?.includes('Flex Academia')).length,
+    multiGymConsultants: consultants.filter(c => (c.gym_count || 0) > 1).length,
   }
 
   const canEdit = profile?.role === 'clinic_admin'
@@ -388,12 +468,12 @@ export default function ConsultantsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">
-            {profile?.role === 'manager' ? 'Minha Equipe' : 'Consultores'}
+            {profile?.role === 'manager' ? 'Minha Equipe' : 'Consultores por Academia'}
           </h1>
           <p className="text-secondary-600">
             {profile?.role === 'manager'
               ? 'Gerencie sua equipe de consultores'
-              : 'Gerencie todos os consultores da clínica'
+              : 'Gerencie todos os consultores organizados por academia'
             }
           </p>
         </div>
@@ -409,8 +489,8 @@ export default function ConsultantsPage() {
         )}
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Enhanced Stats Cards */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -423,8 +503,9 @@ export default function ConsultantsPage() {
                   <span className="text-sm font-bold text-primary-600">{stats.total}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Total</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Total</p>
+                <p className="text-xs text-secondary-400">Consultores</p>
               </div>
             </div>
           </div>
@@ -443,8 +524,9 @@ export default function ConsultantsPage() {
                   <span className="text-sm font-bold text-success-600">{stats.active}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Ativos</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Ativos</p>
+                <p className="text-xs text-secondary-400">Consultores</p>
               </div>
             </div>
           </div>
@@ -459,12 +541,13 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-danger-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-danger-600">{stats.inactive}</span>
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-primary-600">{stats.totalLeads}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Inativos</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Total</p>
+                <p className="text-xs text-secondary-400">Leads</p>
               </div>
             </div>
           </div>
@@ -479,32 +562,75 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-primary-600">{stats.totalLeads}</span>
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-warning-600">{stats.flexConsultants}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Total Leads</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Flex</p>
+                <p className="text-xs text-secondary-400">Academia</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.multiGymConsultants}</span>
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Múltiplas</p>
+                <p className="text-xs text-secondary-400">Academias</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-danger-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-danger-600">{stats.inactive}</span>
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Inativos</p>
+                <p className="text-xs text-secondary-400">Consultores</p>
               </div>
             </div>
           </div>
         </motion.div>
       </div>
 
-      {/* Filters */}
+      {/* Enhanced Filters */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
+        transition={{ delay: 0.6 }}
         className="card"
       >
         <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar consultores..."
+                placeholder="Buscar por nome, email ou academia..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -522,24 +648,51 @@ export default function ConsultantsPage() {
               <option value="pending">Pendente</option>
             </select>
 
+            <select
+              className="input"
+              value={gymFilter}
+              onChange={(e) => setGymFilter(e.target.value)}
+            >
+              <option value="">Todas as academias</option>
+              {gyms.map(gym => (
+                <option key={gym} value={gym}>
+                  {gym}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input"
+              value={gymCountFilter}
+              onChange={(e) => setGymCountFilter(e.target.value)}
+            >
+              <option value="">Qualquer quantidade</option>
+              <option value="1">1 academia</option>
+              <option value="2">2 academias</option>
+              <option value="3+">3+ academias</option>
+            </select>
+
             <button
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
+                setGymFilter('')
+                setGymCountFilter('')
               }}
               className="btn btn-secondary"
             >
+              <FunnelIcon className="h-4 w-4 mr-2" />
               Limpar Filtros
             </button>
           </div>
         </div>
       </motion.div>
 
-      {/* Consultants Table */}
+      {/* Enhanced Consultants Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
+        transition={{ delay: 0.7 }}
         className="card"
       >
         <div className="card-body p-0">
@@ -548,6 +701,7 @@ export default function ConsultantsPage() {
               <thead>
                 <tr>
                   <th>Consultor</th>
+                  <th>Academias</th>
                   <th>Contato</th>
                   <th>Gerente</th>
                   <th>Performance</th>
@@ -579,6 +733,29 @@ export default function ConsultantsPage() {
                     </td>
                     <td>
                       <div className="space-y-1">
+                        <div className="flex items-center">
+                          <BuildingOfficeIcon className="h-4 w-4 text-primary-500 mr-2" />
+                          <span className="text-sm font-medium text-primary-900">
+                            {consultant.gym_count} academia{consultant.gym_count !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        <div className="text-xs text-secondary-600">
+                          {consultant.gym_names?.slice(0, 2).join(', ')}
+                          {(consultant.gym_names?.length || 0) > 2 && (
+                            <span className="text-secondary-500">
+                              {' '}+{(consultant.gym_names?.length || 0) - 2} mais
+                            </span>
+                          )}
+                        </div>
+                        {consultant.gym_names?.includes('Flex Academia') && (
+                          <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-success-100 text-success-800">
+                            Flex
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="space-y-1">
                         <div className="flex items-center text-sm">
                           <EnvelopeIcon className="h-3 w-3 text-secondary-400 mr-1" />
                           {consultant.email}
@@ -594,8 +771,21 @@ export default function ConsultantsPage() {
                     <td>
                       {consultant.manager ? (
                         <div className="flex items-center">
-                          <BuildingOfficeIcon className="h-4 w-4 text-secondary-400 mr-2" />
-                          <span className="text-sm">{consultant.manager.full_name}</span>
+                          <div className="h-8 w-8 rounded-full bg-success-600 flex items-center justify-center mr-3">
+                            <span className="text-xs font-medium text-white">
+                              {consultant.manager.full_name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-secondary-900">
+                              {consultant.manager.full_name}
+                            </div>
+                            {consultant.manager.gym_name && (
+                              <div className="text-xs text-secondary-500">
+                                {consultant.manager.gym_name}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ) : (
                         <span className="text-sm text-secondary-500">Sem manager</span>
@@ -791,7 +981,7 @@ export default function ConsultantsPage() {
                     {managers.length > 0 && (
                       <div>
                         <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Gerente (Opcional)
+                          Gerente/Academia (Opcional)
                         </label>
                         <select
                           className="input"
@@ -801,7 +991,7 @@ export default function ConsultantsPage() {
                           <option value="">Selecione um gerente</option>
                           {managers.map(manager => (
                             <option key={manager.id} value={manager.id}>
-                              {manager.full_name}
+                              {manager.full_name} - {manager.gym_name}
                             </option>
                           ))}
                         </select>

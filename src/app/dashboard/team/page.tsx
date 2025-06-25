@@ -7,14 +7,10 @@ import { motion } from 'framer-motion'
 import {
     UsersIcon,
     MagnifyingGlassIcon,
-    PlusIcon,
     UserPlusIcon,
     EnvelopeIcon,
     PhoneIcon,
-    ChartBarIcon,
     EyeIcon,
-    PencilIcon,
-    TrashIcon,
     ExclamationTriangleIcon,
     CurrencyDollarIcon,
     ArrowTrendingUpIcon,
@@ -22,7 +18,6 @@ import {
     ClockIcon,
     CheckCircleIcon,
     XCircleIcon,
-    CalendarIcon,
     FunnelIcon,
     UserMinusIcon,
 } from '@heroicons/react/24/outline'
@@ -115,41 +110,60 @@ export default function TeamPage() {
             const { data: hierarchyData, error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .select(`
-          created_at,
-          consultant_id,
-          users!hierarchies_consultant_id_fkey (
-            id,
-            email,
-            full_name,
-            phone,
-            role,
-            status,
-            created_at,
-            updated_at
-          )
-        `)
+                    created_at,
+                    consultant_id,
+                    users!hierarchies_consultant_id_fkey (
+                        id,
+                        email,
+                        full_name,
+                        phone,
+                        role,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                `)
                 .eq('manager_id', profile.id)
 
             if (hierarchyError) throw hierarchyError
 
-            // Buscar estatísticas para cada membro
+            // Verificar se hierarchyData é válido e não vazio
+            if (!hierarchyData || hierarchyData.length === 0) {
+                setTeamMembers([])
+                setTeamStats({
+                    totalMembers: 0,
+                    activeMembers: 0,
+                    totalLeads: 0,
+                    totalConversions: 0,
+                    teamConversionRate: 0,
+                    totalCommissions: 0,
+                    totalPaidCommissions: 0,
+                })
+                setLoading(false)
+                return
+            }
+
             // Buscar estatísticas para cada membro
             const teamMembersWithStats = await Promise.all(
-                (hierarchyData || []).map(async (hierarchy) => {
+                hierarchyData.map(async (hierarchy) => {
                     const member = hierarchy.users
                     if (!member) return null
+
+                    // Verificar se member é um array ou objeto
+                    const memberData = Array.isArray(member) ? member[0] : member
+                    if (!memberData) return null
 
                     // Buscar leads do consultor
                     const { data: leadsData } = await supabase
                         .from('leads')
                         .select('status, created_at')
-                        .eq('indicated_by', member && member[0].id)
+                        .eq('indicated_by', memberData.id)
 
                     // Buscar comissões do consultor
                     const { data: commissionsData } = await supabase
                         .from('commissions')
                         .select('amount, status, created_at')
-                        .eq('user_id', member && member[0].id)
+                        .eq('user_id', memberData.id)
 
                     // Calcular estatísticas
                     const totalLeads = leadsData?.length || 0
@@ -174,7 +188,7 @@ export default function TeamPage() {
                     const avgLeadsPerMonth = totalLeads / membershipMonths
 
                     return {
-                        ...member,
+                        ...memberData,
                         hierarchy: {
                             created_at: hierarchy.created_at
                         },
@@ -194,7 +208,7 @@ export default function TeamPage() {
                 })
             )
 
-            const validMembers = teamMembersWithStats.filter(Boolean) as unknown as TeamMember[]
+            const validMembers = teamMembersWithStats.filter(Boolean) as TeamMember[]
             setTeamMembers(validMembers)
 
             // Calcular estatísticas da equipe
@@ -234,11 +248,11 @@ export default function TeamPage() {
             const { data: consultantsData, error } = await supabase
                 .from('users')
                 .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id)
-        `)
+                    id,
+                    full_name,
+                    email,
+                    user_clinics!inner(clinic_id)
+                `)
                 .eq('user_clinics.clinic_id', userClinic.clinic_id)
                 .eq('role', 'consultant')
                 .eq('status', 'active')
@@ -289,8 +303,8 @@ export default function TeamPage() {
             toast.success('Consultor adicionado à equipe com sucesso!')
             setIsAddModalOpen(false)
             setSelectedConsultantId('')
-            fetchTeamData()
-            fetchAvailableConsultants()
+            await fetchTeamData()
+            await fetchAvailableConsultants()
         } catch (error: any) {
             console.error('Erro ao adicionar consultor à equipe:', error)
             toast.error('Erro ao adicionar consultor à equipe')
@@ -316,8 +330,8 @@ export default function TeamPage() {
             toast.success('Consultor removido da equipe com sucesso!')
             setIsRemoveModalOpen(false)
             setSelectedMember(null)
-            fetchTeamData()
-            fetchAvailableConsultants()
+            await fetchTeamData()
+            await fetchAvailableConsultants()
         } catch (error: any) {
             console.error('Erro ao remover consultor da equipe:', error)
             toast.error('Erro ao remover consultor da equipe')
@@ -457,7 +471,7 @@ export default function TeamPage() {
                     <button
                         onClick={() => setIsAddModalOpen(true)}
                         className="btn btn-primary"
-                        disabled={availableConsultants.length === 0}
+                        disabled={loading || availableConsultants.length === 0}
                     >
                         <UserPlusIcon className="h-4 w-4 mr-2" />
                         Adicionar à Equipe
@@ -1043,7 +1057,7 @@ export default function TeamPage() {
                                         <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900">
                                             Remover da Equipe
                                         </Dialog.Title>
-                                    </div>
+                                        </div>
 
                                     <p className="text-sm text-secondary-500 mb-6">
                                         Tem certeza que deseja remover <strong>{selectedMember?.full_name}</strong> da sua equipe?

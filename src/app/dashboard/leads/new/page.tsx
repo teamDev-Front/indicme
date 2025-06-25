@@ -14,15 +14,8 @@ import Link from 'next/link'
 
 const leadSchema = z.object({
   full_name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
-  email: z.string().email('Email inválido').optional().or(z.literal('')),
   phone: z.string().min(10, 'Telefone deve ter pelo menos 10 dígitos'),
-  cpf: z.string().optional(),
-  address: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  zip_code: z.string().optional(),
-  age: z.number().min(1).max(120).optional(),
-  gender: z.enum(['male', 'female', 'other']).optional(),
+  email: z.string().email('Email inválido').optional().or(z.literal('')),
   notes: z.string().optional(),
 })
 
@@ -60,17 +53,11 @@ export default function NewLeadPage() {
         throw new Error('Usuário não está associado a uma clínica')
       }
 
-      // Preparar dados do lead
+      // Preparar dados do lead (apenas campos obrigatórios)
       const leadData = {
-        ...data,
+        full_name: data.full_name,
+        phone: data.phone,
         email: data.email || null,
-        cpf: data.cpf || null,
-        address: data.address || null,
-        city: data.city || null,
-        state: data.state || null,
-        zip_code: data.zip_code || null,
-        age: data.age || null,
-        gender: data.gender || null,
         notes: data.notes || null,
         indicated_by: profile.id,
         clinic_id: userClinic.clinic_id,
@@ -124,15 +111,15 @@ export default function NewLeadPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="card"
+        className="card max-w-2xl mx-auto"
       >
         <form onSubmit={handleSubmit(onSubmit)} className="card-body space-y-6">
           {/* Informações Básicas */}
           <div>
             <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Informações Básicas
+              Informações do Lead
             </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div className="space-y-4">
               <div>
                 <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
                   Nome Completo *
@@ -167,7 +154,7 @@ export default function NewLeadPage() {
 
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Email
+                  Email (opcional)
                 </label>
                 <input
                   type="email"
@@ -182,131 +169,18 @@ export default function NewLeadPage() {
               </div>
 
               <div>
-                <label htmlFor="cpf" className="block text-sm font-medium text-secondary-700 mb-2">
-                  CPF
+                <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
+                  Observações (opcional)
                 </label>
-                <input
-                  type="text"
-                  id="cpf"
-                  {...register('cpf')}
+                <textarea
+                  id="notes"
+                  {...register('notes')}
+                  rows={4}
                   className="input"
-                  placeholder="000.000.000-00"
+                  placeholder="Informações adicionais sobre o lead..."
                 />
               </div>
             </div>
-          </div>
-
-          {/* Informações Pessoais */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Informações Pessoais
-            </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-              <div>
-                <label htmlFor="age" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Idade
-                </label>
-                <input
-                  type="number"
-                  id="age"
-                  {...register('age', { valueAsNumber: true })}
-                  className="input"
-                  placeholder="25"
-                  min="1"
-                  max="120"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="gender" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Gênero
-                </label>
-                <select
-                  id="gender"
-                  {...register('gender')}
-                  className="input"
-                >
-                  <option value="">Selecione</option>
-                  <option value="male">Masculino</option>
-                  <option value="female">Feminino</option>
-                  <option value="other">Outro</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Endereço */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Endereço
-            </h3>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <label htmlFor="address" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Endereço
-                </label>
-                <input
-                  type="text"
-                  id="address"
-                  {...register('address')}
-                  className="input"
-                  placeholder="Rua, número, bairro"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="city" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Cidade
-                </label>
-                <input
-                  type="text"
-                  id="city"
-                  {...register('city')}
-                  className="input"
-                  placeholder="São Paulo"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="state" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Estado
-                </label>
-                <input
-                  type="text"
-                  id="state"
-                  {...register('state')}
-                  className="input"
-                  placeholder="SP"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="zip_code" className="block text-sm font-medium text-secondary-700 mb-2">
-                  CEP
-                </label>
-                <input
-                  type="text"
-                  id="zip_code"
-                  {...register('zip_code')}
-                  className="input"
-                  placeholder="00000-000"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Observações */}
-          <div>
-            <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
-              Observações
-            </label>
-            <textarea
-              id="notes"
-              {...register('notes')}
-              rows={4}
-              className="input"
-              placeholder="Informações adicionais sobre o lead..."
-            />
           </div>
 
           {/* Actions */}

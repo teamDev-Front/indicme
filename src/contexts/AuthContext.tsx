@@ -1,4 +1,3 @@
-// src/contexts/AuthContext.tsx
 'use client'
 import { createContext, useContext, useEffect, useState } from 'react'
 import { User as SupabaseUser } from '@supabase/supabase-js'
@@ -28,10 +27,8 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
-console.log('🔐 AUTHCONTEXT CARREGADO!')
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  console.log('🔐 AUTHPROVIDER INICIANDO!')
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [profile, setProfile] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,14 +38,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // Verificar usuário atual
     const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      setUser(user)
-      
-      if (user) {
-        await fetchProfile(user.id)
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        setUser(user)
+        
+        if (user) {
+          await fetchProfile(user.id)
+        }
+      } catch (error) {
+        console.error('Erro ao verificar usuário:', error)
+      } finally {
+        setLoading(false)
       }
-      
-      setLoading(false)
     }
 
     getUser()
@@ -56,15 +57,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Escutar mudanças de autenticação
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        setUser(session?.user ?? null)
-        
-        if (session?.user) {
-          await fetchProfile(session.user.id)
-        } else {
-          setProfile(null)
+        try {
+          setUser(session?.user ?? null)
+          
+          if (session?.user) {
+            await fetchProfile(session.user.id)
+          } else {
+            setProfile(null)
+          }
+        } catch (error) {
+          console.error('Erro na mudança de estado de auth:', error)
+        } finally {
+          setLoading(false)
         }
-        
-        setLoading(false)
       }
     )
 
@@ -90,39 +95,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
- const signIn = async (email: string, password: string) => {
-  try {
-    setLoading(true)
-    console.log('🔐 Iniciando login com:', { email, password: '***' })
-    
-    const supabase = createClient()
-    console.log('🔐 Cliente Supabase criado para login')
-    
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+  const signIn = async (email: string, password: string) => {
+    try {
+      setLoading(true)
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
 
-    console.log('🔐 Resposta do signInWithPassword:', { data, error })
+      if (error) {
+        throw error
+      }
 
-    if (error) {
-      console.error('🔐 Erro no signInWithPassword:', error)
+      if (data.user) {
+        toast.success('Login realizado com sucesso!')
+        // Aguardar um pouco para garantir que o estado foi atualizado
+        setTimeout(() => {
+          router.push('/dashboard')
+        }, 100)
+      }
+    } catch (error: any) {
+      console.error('Erro no login:', error)
+      toast.error(error.message || 'Erro ao fazer login')
       throw error
+    } finally {
+      setLoading(false)
     }
-
-    if (data.user) {
-      console.log('🔐 Login bem-sucedido! Usuário:', data.user)
-      toast.success('Login realizado com sucesso!')
-      router.push('/dashboard')
-    }
-  } catch (error: any) {
-    console.error('🔐 Erro completo no login:', error)
-    toast.error(error.message || 'Erro ao fazer login')
-    throw error
-  } finally {
-    setLoading(false)
   }
-}
 
   const signUp = async (email: string, password: string, fullName: string) => {
     try {
@@ -150,7 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             id: data.user.id,
             email: data.user.email!,
             full_name: fullName,
-            role: 'consultant', // Role padrão
+            role: 'consultant',
             status: 'pending',
           })
 
@@ -178,15 +178,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error
       }
 
+      // Limpar estados imediatamente
       setUser(null)
       setProfile(null)
+      
       toast.success('Logout realizado com sucesso!')
-      router.push('/auth/login')
+      
+      // Aguardar um pouco antes de redirecionar
+      setTimeout(() => {
+        router.push('/auth/login')
+        setLoading(false)
+      }, 100)
     } catch (error: any) {
+      console.error('Erro ao fazer logout:', error)
       toast.error(error.message || 'Erro ao fazer logout')
-      throw error
-    } finally {
       setLoading(false)
+      throw error
     }
   }
 
@@ -196,7 +203,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const { error } = await supabase
         .from('users')
-        .update(data)
+        .update({
+          ...data,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', user.id)
 
       if (error) {
@@ -206,6 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await fetchProfile(user.id)
       toast.success('Perfil atualizado com sucesso!')
     } catch (error: any) {
+      console.error('Erro ao atualizar perfil:', error)
       toast.error(error.message || 'Erro ao atualizar perfil')
       throw error
     }

@@ -16,6 +16,8 @@ import {
   ClockIcon,
   PhoneIcon,
   EnvelopeIcon,
+  MapPinIcon,
+  UserIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import LeadDetailModal from '@/components/leads/LeadDetailModal'
@@ -58,10 +60,14 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
+  const [consultantFilter, setConsultantFilter] = useState('')
   const [dateFilter, setDateFilter] = useState('')
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [consultants, setConsultants] = useState<Array<{id: string, full_name: string}>>([])
+  const [states, setStates] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
@@ -108,7 +114,25 @@ export default function LeadsPage() {
         throw error
       }
 
-      setLeads(data || [])
+      const leadsData = data || []
+      setLeads(leadsData)
+
+      // Extrair consultores únicos para o filtro
+      const uniqueConsultants = Array.from(
+        new Map(
+          leadsData
+            .filter(lead => lead.users)
+            .map(lead => [lead.users!.full_name, { id: lead.indicated_by, full_name: lead.users!.full_name }])
+        ).values()
+      )
+      setConsultants(uniqueConsultants)
+
+      // Extrair estados únicos para o filtro
+      const uniqueStates = Array.from(
+        new Set(leadsData.filter(lead => lead.state).map(lead => lead.state!))
+      ).sort()
+      setStates(uniqueStates)
+
     } catch (error: any) {
       console.error('Erro ao buscar leads:', error)
       toast.error('Erro ao carregar leads')
@@ -171,7 +195,7 @@ export default function LeadsPage() {
     return option?.color || 'secondary'
   }
 
-  // Filtrar leads
+  // Filtrar leads com novos filtros
   const filteredLeads = leads.filter(lead => {
     const matchesSearch = !searchTerm || 
       lead.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -180,10 +204,12 @@ export default function LeadsPage() {
       lead.cpf?.includes(searchTerm)
     
     const matchesStatus = !statusFilter || lead.status === statusFilter
+    const matchesState = !stateFilter || lead.state === stateFilter
+    const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
     
     const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
     
-    return matchesSearch && matchesStatus && matchesDate
+    return matchesSearch && matchesStatus && matchesState && matchesConsultant && matchesDate
   })
 
   const stats = {
@@ -331,7 +357,7 @@ export default function LeadsPage() {
         </motion.div>
       </div>
 
-      {/* Filters */}
+      {/* Enhanced Filters */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -339,12 +365,12 @@ export default function LeadsPage() {
         className="card"
       >
         <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar leads..."
+                placeholder="Buscar por nome, email, telefone..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -363,6 +389,34 @@ export default function LeadsPage() {
                 </option>
               ))}
             </select>
+
+            <select
+              className="input"
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value)}
+            >
+              <option value="">Todos os estados</option>
+              {states.map(state => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
+
+            {(profile?.role === 'clinic_admin' || profile?.role === 'clinic_viewer' || profile?.role === 'manager') && (
+              <select
+                className="input"
+                value={consultantFilter}
+                onChange={(e) => setConsultantFilter(e.target.value)}
+              >
+                <option value="">Todos os consultores</option>
+                {consultants.map(consultant => (
+                  <option key={consultant.id} value={consultant.id}>
+                    {consultant.full_name}
+                  </option>
+                ))}
+              </select>
+            )}
             
             <input
               type="date"
@@ -375,6 +429,8 @@ export default function LeadsPage() {
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
+                setStateFilter('')
+                setConsultantFilter('')
                 setDateFilter('')
               }}
               className="btn btn-secondary"
@@ -386,7 +442,7 @@ export default function LeadsPage() {
         </div>
       </motion.div>
 
-      {/* Leads Table */}
+      {/* Enhanced Leads Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -398,8 +454,9 @@ export default function LeadsPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Lead</th>
+                  <th>Nome</th>
                   <th>Contato</th>
+                  <th>Estado</th>
                   <th>Status</th>
                   {profile?.role !== 'consultant' && <th>Indicado por</th>}
                   <th>Data</th>
@@ -410,20 +467,27 @@ export default function LeadsPage() {
                 {filteredLeads.map((lead) => (
                   <tr key={lead.id}>
                     <td>
-                      <div>
-                        <div className="font-medium text-secondary-900">
-                          {lead.full_name}
-                        </div>
-                        {lead.age && (
-                          <div className="text-sm text-secondary-500">
-                            {lead.age} anos
-                            {lead.gender && (
-                              <span className="ml-1">
-                                • {lead.gender === 'male' ? 'M' : lead.gender === 'female' ? 'F' : 'Outro'}
-                              </span>
-                            )}
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center">
+                            <UserIcon className="h-5 w-5 text-white" />
                           </div>
-                        )}
+                        </div>
+                        <div className="ml-4">
+                          <div className="font-medium text-secondary-900">
+                            {lead.full_name}
+                          </div>
+                          {lead.age && (
+                            <div className="text-sm text-secondary-500">
+                              {lead.age} anos
+                              {lead.gender && (
+                                <span className="ml-1">
+                                  • {lead.gender === 'male' ? 'M' : lead.gender === 'female' ? 'F' : 'Outro'}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -438,6 +502,26 @@ export default function LeadsPage() {
                             <span className="text-sm">{lead.email}</span>
                           </div>
                         )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center">
+                        <MapPinIcon className="h-4 w-4 text-secondary-400 mr-2" />
+                        <div>
+                          {lead.state && (
+                            <div className="text-sm font-medium text-secondary-900">
+                              {lead.state}
+                            </div>
+                          )}
+                          {lead.city && (
+                            <div className="text-xs text-secondary-500">
+                              {lead.city}
+                            </div>
+                          )}
+                          {!lead.state && !lead.city && (
+                            <span className="text-sm text-secondary-400">Não informado</span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -465,11 +549,20 @@ export default function LeadsPage() {
                     </td>
                     {profile?.role !== 'consultant' && (
                       <td>
-                        <div className="text-sm text-secondary-900">
-                          {lead.users?.full_name}
-                        </div>
-                        <div className="text-xs text-secondary-500">
-                          {lead.users?.email}
+                        <div className="flex items-center">
+                          <div className="h-8 w-8 rounded-full bg-success-600 flex items-center justify-center mr-3">
+                            <span className="text-xs font-medium text-white">
+                              {lead.users?.full_name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-secondary-900">
+                              {lead.users?.full_name}
+                            </div>
+                            <div className="text-xs text-secondary-500">
+                              {lead.users?.email}
+                            </div>
+                          </div>
                         </div>
                       </td>
                     )}

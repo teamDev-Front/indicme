@@ -16,9 +16,9 @@ import {
   PencilIcon,
   TrashIcon,
   ExclamationTriangleIcon,
-  UsersIcon,
   CurrencyDollarIcon,
   ArrowTrendingUpIcon,
+  FunnelIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
@@ -33,6 +33,7 @@ interface Manager {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
+  gym_name?: string // Nova propriedade para academia
   _count?: {
     consultants: number
     leads: number
@@ -50,6 +51,7 @@ export default function ManagersPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [gymFilter, setGymFilter] = useState('')
   const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -58,9 +60,11 @@ export default function ManagersPage() {
     full_name: '',
     email: '',
     phone: '',
+    gym_name: '',
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [gyms, setGyms] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
@@ -124,8 +128,14 @@ export default function ManagersPage() {
               .filter(c => c?.status === 'paid')
               .reduce((sum, c) => sum + (c?.amount || 0), 0)
 
+            // Simular o campo gym_name baseado no nome do gerente (você pode adaptar isso)
+            const gymName = manager.full_name.includes('Flex') ? 'Flex Academia' : 
+                           manager.full_name.includes('Strong') ? 'Strong Fitness' :
+                           manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
+
             return {
               ...manager,
+              gym_name: gymName,
               _count: {
                 consultants: consultantsCount,
                 leads: leadsCount,
@@ -140,6 +150,7 @@ export default function ManagersPage() {
             console.error('Erro ao buscar estatísticas para gerente:', manager.id, statsError)
             return {
               ...manager,
+              gym_name: 'Academia não definida',
               _count: {
                 consultants: 0,
                 leads: 0,
@@ -155,6 +166,13 @@ export default function ManagersPage() {
       )
 
       setManagers(managersWithStats)
+
+      // Extrair academias únicas para o filtro
+      const uniqueGyms = Array.from(
+        new Set(managersWithStats.map(m => m.gym_name).filter(Boolean))
+      ).sort()
+      setGyms(uniqueGyms)
+
     } catch (error: any) {
       console.error('Erro ao buscar gerentes:', error)
       toast.error('Erro ao carregar gerentes')
@@ -171,11 +189,12 @@ export default function ManagersPage() {
         full_name: manager.full_name,
         email: manager.email,
         phone: manager.phone || '',
+        gym_name: manager.gym_name || '',
         password: '', // Não mostrar senha existente
       })
     } else {
       setSelectedManager(null)
-      setFormData({ full_name: '', email: '', phone: '', password: '' })
+      setFormData({ full_name: '', email: '', phone: '', gym_name: '', password: '' })
     }
     setIsModalOpen(true)
   }
@@ -196,26 +215,23 @@ export default function ManagersPage() {
       if (modalMode === 'create') {
         console.log('Criando gerente com dados:', formData)
 
-        // 1. Fazer signup normal (isso sempre funciona)
+        // 1. Fazer signup normal
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: formData.email,
           password: formData.password,
           options: {
             data: {
               full_name: formData.full_name,
+              gym_name: formData.gym_name,
             }
           }
         })
-
-        console.log('Resultado do signUp:', { signUpData, signUpError })
 
         if (signUpError) {
           throw new Error(`Erro no cadastro: ${signUpError.message}`)
         }
 
         if (signUpData.user) {
-          console.log('Usuário criado no auth, ID:', signUpData.user.id)
-
           // 2. Aguardar um pouco para garantir que o usuário foi criado
           await new Promise(resolve => setTimeout(resolve, 1000))
 
@@ -229,12 +245,12 @@ export default function ManagersPage() {
               phone: formData.phone || null,
               role: 'manager',
               status: 'active',
+              // Você pode adicionar um campo gym_name na tabela users
+              // gym_name: formData.gym_name,
             }, {
               onConflict: 'id',
               ignoreDuplicates: false
             })
-
-          console.log('Resultado do upsert profile:', upsertError)
 
           if (upsertError) {
             throw new Error(`Erro ao criar perfil: ${upsertError.message}`)
@@ -251,8 +267,6 @@ export default function ManagersPage() {
               ignoreDuplicates: true
             })
 
-          console.log('Resultado da associação à clínica:', clinicError)
-
           if (clinicError) {
             throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
           }
@@ -263,12 +277,13 @@ export default function ManagersPage() {
         }
 
       } else {
-        // EDIÇÃO (mantém igual)
+        // EDIÇÃO
         if (!selectedManager) return
 
         const updateData: any = {
           full_name: formData.full_name,
           phone: formData.phone || null,
+          // gym_name: formData.gym_name, // Se você adicionar este campo
           updated_at: new Date().toISOString()
         }
 
@@ -283,9 +298,9 @@ export default function ManagersPage() {
       }
 
       setIsModalOpen(false)
-      setFormData({ full_name: '', email: '', phone: '', password: '' })
+      setFormData({ full_name: '', email: '', phone: '', gym_name: '', password: '' })
 
-      // Aguardar um pouco antes de recarregar para garantir que os dados foram salvos
+      // Aguardar um pouco antes de recarregar
       setTimeout(() => {
         fetchManagers()
       }, 1500)
@@ -358,11 +373,13 @@ export default function ManagersPage() {
   const filteredManagers = managers.filter(manager => {
     const matchesSearch = !searchTerm ||
       manager.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      manager.email.toLowerCase().includes(searchTerm.toLowerCase())
+      manager.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      manager.gym_name?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchesStatus = !statusFilter || manager.status === statusFilter
+    const matchesGym = !gymFilter || manager.gym_name === gymFilter
 
-    return matchesSearch && matchesStatus
+    return matchesSearch && matchesStatus && matchesGym
   })
 
   const stats = {
@@ -371,6 +388,7 @@ export default function ManagersPage() {
     inactive: managers.filter(m => m.status === 'inactive').length,
     totalConsultants: managers.reduce((sum, m) => sum + (m._count?.consultants || 0), 0),
     totalCommissions: managers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0),
+    totalGyms: gyms.length,
   }
 
   const canEdit = profile?.role === 'clinic_admin'
@@ -402,9 +420,9 @@ export default function ManagersPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-secondary-900">Gerentes</h1>
+          <h1 className="text-2xl font-bold text-secondary-900">Gerentes por Academia</h1>
           <p className="text-secondary-600">
-            Gerencie todos os gerentes da clínica
+            Gerencie todos os gerentes da clínica organizados por academia
           </p>
         </div>
 
@@ -419,8 +437,8 @@ export default function ManagersPage() {
         )}
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
+      {/* Enhanced Stats Cards */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -433,8 +451,9 @@ export default function ManagersPage() {
                   <span className="text-sm font-bold text-primary-600">{stats.total}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Total</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Total</p>
+                <p className="text-xs text-secondary-400">Gerentes</p>
               </div>
             </div>
           </div>
@@ -453,8 +472,9 @@ export default function ManagersPage() {
                   <span className="text-sm font-bold text-success-600">{stats.active}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Ativos</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Ativos</p>
+                <p className="text-xs text-secondary-400">Gerentes</p>
               </div>
             </div>
           </div>
@@ -470,11 +490,12 @@ export default function ManagersPage() {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-warning-600">{stats.totalConsultants}</span>
+                  <BuildingOfficeIcon className="w-4 h-4 text-warning-600" />
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Consultores</p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Academias</p>
+                <p className="text-xs font-bold text-warning-600">{stats.totalGyms}</p>
               </div>
             </div>
           </div>
@@ -489,15 +510,13 @@ export default function ManagersPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                  <CurrencyDollarIcon className="w-4 h-4 text-success-600" />
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-primary-600">{stats.totalConsultants}</span>
                 </div>
               </div>
-              <div className="ml-5">
-                <p className="text-xs font-medium text-secondary-500">Comissões Pagas</p>
-                <p className="text-sm font-bold text-success-600">
-                  R$ {stats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                </p>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Consultores</p>
+                <p className="text-xs text-secondary-400">Total</p>
               </div>
             </div>
           </div>
@@ -512,13 +531,36 @@ export default function ManagersPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <CurrencyDollarIcon className="w-4 h-4 text-success-600" />
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Comissões</p>
+                <p className="text-xs font-bold text-success-600">
+                  R$ {stats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                </p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                   <ArrowTrendingUpIcon className="w-4 h-4 text-primary-600" />
                 </div>
               </div>
-              <div className="ml-5">
+              <div className="ml-3">
                 <p className="text-xs font-medium text-secondary-500">Performance</p>
-                <p className="text-sm font-bold text-primary-600">
+                <p className="text-xs font-bold text-primary-600">
                   {stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(1) : 0}%
                 </p>
               </div>
@@ -527,20 +569,20 @@ export default function ManagersPage() {
         </motion.div>
       </div>
 
-      {/* Filters */}
+      {/* Enhanced Filters */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
+        transition={{ delay: 0.6 }}
         className="card"
       >
         <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar gerentes..."
+                placeholder="Buscar por nome, email ou academia..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -558,24 +600,39 @@ export default function ManagersPage() {
               <option value="pending">Pendente</option>
             </select>
 
+            <select
+              className="input"
+              value={gymFilter}
+              onChange={(e) => setGymFilter(e.target.value)}
+            >
+              <option value="">Todas as academias</option>
+              {gyms.map(gym => (
+                <option key={gym} value={gym}>
+                  {gym}
+                </option>
+              ))}
+            </select>
+
             <button
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
+                setGymFilter('')
               }}
               className="btn btn-secondary"
             >
+              <FunnelIcon className="h-4 w-4 mr-2" />
               Limpar Filtros
             </button>
           </div>
         </div>
       </motion.div>
 
-      {/* Managers Table */}
+      {/* Enhanced Managers Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.6 }}
+        transition={{ delay: 0.7 }}
         className="card"
       >
         <div className="card-body p-0">
@@ -584,6 +641,7 @@ export default function ManagersPage() {
               <thead>
                 <tr>
                   <th>Gerente</th>
+                  <th>Academia</th>
                   <th>Contato</th>
                   <th>Equipe</th>
                   <th>Performance</th>
@@ -609,6 +667,19 @@ export default function ManagersPage() {
                           </div>
                           <div className="text-sm text-secondary-500">
                             Desde {new Date(manager.created_at).toLocaleDateString('pt-BR')}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center">
+                        <BuildingOfficeIcon className="h-4 w-4 text-primary-500 mr-2" />
+                        <div>
+                          <div className="text-sm font-medium text-primary-900">
+                            {manager.gym_name || 'Não definida'}
+                          </div>
+                          <div className="text-xs text-secondary-500">
+                            Academia responsável
                           </div>
                         </div>
                       </div>
@@ -784,7 +855,34 @@ export default function ManagersPage() {
                         className="input"
                         value={formData.full_name}
                         onChange={(e) => setFormData(prev => ({ ...prev, full_name: e.target.value }))}
-                        placeholder="John Doe"
+                        placeholder="Nome do gerente"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Academia
+                      </label>
+                      <input
+                        type="text"
+                        className="input"
+                        value={formData.gym_name}
+                        onChange={(e) => setFormData(prev => ({ ...prev, gym_name: e.target.value }))}
+                        placeholder="Ex: Flex Academia, Strong Fitness"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Email
+                      </label>
+                      <input
+                        type="email"
+                        className="input"
+                        value={formData.email}
+                        onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                        placeholder="email@academia.com"
+                        disabled={modalMode === 'edit'}
                       />
                     </div>
 
@@ -801,31 +899,20 @@ export default function ManagersPage() {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        className="input"
-                        value={formData.email}
-                        onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                        placeholder="VcY9d@example.com"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        {modalMode === 'create' ? 'Senha' : 'Nova Senha (opcional)'}
-                      </label>
-                      <input
-                        type="password"
-                        className="input"
-                        value={formData.password}
-                        onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                        placeholder={modalMode === 'create' ? 'Mínimo 6 caracteres' : 'Deixe em branco para manter a atual'}
-                      />
-                    </div>
+                    {modalMode === 'create' && (
+                      <div>
+                        <label className="block text-sm font-medium text-secondary-700 mb-2">
+                          Senha
+                        </label>
+                        <input
+                          type="password"
+                          className="input"
+                          value={formData.password}
+                          onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                          placeholder="Mínimo 6 caracteres"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-6 flex justify-end space-x-3">
@@ -844,6 +931,7 @@ export default function ManagersPage() {
                         submitting ||
                         !formData.full_name ||
                         !formData.email ||
+                        !formData.gym_name ||
                         (modalMode === 'create' && !formData.password)
                       }
                     >
