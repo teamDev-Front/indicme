@@ -38,23 +38,16 @@ export const updateSession = async (request: NextRequest) => {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // IMPORTANT: You *must* return the supabaseResponse object as it is. If you're
-  // creating a new response object with NextResponse.redirect() or similar, make
-  // sure to:
-  // 1. Pass along the request to the new response
-  // 2. Copy the cookies from the supabaseResponse to the new response
-
   const pathname = request.nextUrl.pathname
 
-  // Redirecionar para login se não estiver autenticado e tentar acessar área protegida
-  if (!user && pathname.startsWith('/dashboard')) {
+  // Redirecionar para dashboard se estiver autenticado e tentar acessar página de auth
+  if (user && pathname.startsWith('/auth')) {
     const url = request.nextUrl.clone()
-    url.pathname = '/auth/login'
-    console.log('🚫 Usuário não autenticado, redirecionando para login')
+    url.pathname = '/dashboard'
     
     const redirectResponse = NextResponse.redirect(url)
     
-    // CRITICAL: Copy cookies from supabaseResponse to redirectResponse
+    // Copy cookies from supabaseResponse to redirectResponse
     supabaseResponse.cookies.getAll().forEach(({ name, value, ...options }) => {
       redirectResponse.cookies.set(name, value, options)
     })
@@ -62,15 +55,14 @@ export const updateSession = async (request: NextRequest) => {
     return redirectResponse
   }
 
-  // Redirecionar para dashboard se estiver autenticado e tentar acessar página de auth
-  if (user && pathname.startsWith('/auth')) {
+  // Redirecionar para login se não estiver autenticado e tentar acessar área protegida
+  if (!user && pathname.startsWith('/dashboard')) {
     const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
-    console.log('✅ Usuário autenticado, redirecionando para dashboard')
+    url.pathname = '/auth/login'
     
     const redirectResponse = NextResponse.redirect(url)
     
-    // CRITICAL: Copy cookies from supabaseResponse to redirectResponse
+    // Copy cookies from supabaseResponse to redirectResponse
     supabaseResponse.cookies.getAll().forEach(({ name, value, ...options }) => {
       redirectResponse.cookies.set(name, value, options)
     })
@@ -84,15 +76,12 @@ export const updateSession = async (request: NextRequest) => {
     
     if (user) {
       url.pathname = '/dashboard'
-      console.log('✅ Root: Usuário autenticado, redirecionando para dashboard')
     } else {
       url.pathname = '/auth/login'
-      console.log('🚫 Root: Usuário não autenticado, redirecionando para login')
     }
     
     const redirectResponse = NextResponse.redirect(url)
     
-    // CRITICAL: Copy cookies from supabaseResponse to redirectResponse
     supabaseResponse.cookies.getAll().forEach(({ name, value, ...options }) => {
       redirectResponse.cookies.set(name, value, options)
     })
@@ -100,6 +89,5 @@ export const updateSession = async (request: NextRequest) => {
     return redirectResponse
   }
 
-  // IMPORTANT: You *must* return the supabaseResponse object as it is.
   return supabaseResponse
 }
