@@ -11,12 +11,16 @@ export const metadata: Metadata = {
   description: 'Confiança que conecta - Sistema moderno de gestão de indicações',
   keywords: ['indicações', 'clínica', 'leads', 'comissões'],
   authors: [{ name: 'IndicMe Team' }],
-};
+}
 
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
-};
+}
+
+// Desabilitar cache para autenticação
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export default function RootLayout({
   children,
@@ -25,6 +29,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" className="h-full">
+      <head>
+        {/* Prevent caching of authentication-sensitive pages */}
+        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
+      </head>
       <body className={`${inter.className} h-full antialiased`}>
         <AuthProvider>
           {children}
