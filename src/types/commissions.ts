@@ -15,6 +15,7 @@ export interface Commission {
   status: CommissionStatus
   paid_at?: string
   created_at: string
+  arcadas_vendidas?: number
 }
 
 export interface CommissionWithRelations extends Commission {

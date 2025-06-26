@@ -15,6 +15,8 @@ import {
   ChartBarIcon,
   ArrowTrendingUpIcon,
   ArrowDownTrayIcon,
+  StarIcon,
+  TrophyIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 
@@ -22,6 +24,10 @@ interface Commission {
   id: string
   amount: number
   percentage: number
+  valor_por_arcada: number
+  arcadas_vendidas: number
+  valor_bonus: number
+  bonus_conquistados: number
   type: 'consultant' | 'manager'
   status: 'pending' | 'paid' | 'cancelled'
   paid_at: string | null
@@ -34,6 +40,7 @@ interface Commission {
     phone: string
     status: string
     created_at: string
+    arcadas_vendidas: number
   }
   users?: {
     full_name: string
@@ -48,6 +55,7 @@ interface CommissionStats {
   averageCommission: number
   monthlyEarnings: number
   conversionRate: number
+  totalArcadas: number
 }
 
 export default function CommissionsPage() {
@@ -60,6 +68,7 @@ export default function CommissionsPage() {
     averageCommission: 0,
     monthlyEarnings: 0,
     conversionRate: 0,
+    totalArcadas: 0,
   })
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -78,23 +87,24 @@ export default function CommissionsPage() {
   const fetchCommissions = async () => {
     try {
       setLoading(true)
-      
+
       let query = supabase
         .from('commissions')
         .select(`
-          *,
-          leads (
-            id,
-            full_name,
-            phone,
-            status,
-            created_at
-          ),
-          users (
-            full_name,
-            email
-          )
-        `)
+        *,
+        leads (
+          id,
+          full_name,
+          phone,
+          status,
+          created_at,
+          arcadas_vendidas
+        ),
+        users (
+          full_name,
+          email
+        )
+      `)
         .order('created_at', { ascending: false })
 
       // Filtrar baseado no role do usuário
@@ -106,10 +116,10 @@ export default function CommissionsPage() {
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
-        
+
         const consultantIds = hierarchy?.map(h => h.consultant_id) || []
         consultantIds.push(profile.id)
-        
+
         query = query.in('user_id', consultantIds)
       }
       // Clinic admin/viewer veem todas (sem filtros adicionais)
@@ -123,21 +133,25 @@ export default function CommissionsPage() {
       const commissionsData = data || []
       setCommissions(commissionsData)
 
-      // Calcular estatísticas
+      // Calcular estatísticas baseadas nas arcadas
       const pending = commissionsData
         .filter(c => c.status === 'pending')
         .reduce((sum, c) => sum + c.amount, 0)
-      
+
       const paid = commissionsData
         .filter(c => c.status === 'paid')
         .reduce((sum, c) => sum + c.amount, 0)
-      
+
       const cancelled = commissionsData
         .filter(c => c.status === 'cancelled')
         .reduce((sum, c) => sum + c.amount, 0)
 
-      const average = commissionsData.length > 0 
-        ? commissionsData.reduce((sum, c) => sum + c.amount, 0) / commissionsData.length 
+      // Total de arcadas vendidas
+      const totalArcadas = commissionsData
+        .reduce((sum, c) => sum + (c.leads?.arcadas_vendidas || 1), 0)
+
+      const average = commissionsData.length > 0
+        ? commissionsData.reduce((sum, c) => sum + c.amount, 0) / commissionsData.length
         : 0
 
       // Earnings deste mês
@@ -159,6 +173,7 @@ export default function CommissionsPage() {
         averageCommission: average,
         monthlyEarnings,
         conversionRate,
+        totalArcadas, // Adicione este campo às estatísticas
       })
     } catch (error: any) {
       console.error('Erro ao buscar comissões:', error)
@@ -173,12 +188,12 @@ export default function CommissionsPage() {
 
     try {
       setPayingCommission(commissionId)
-      
+
       const { error } = await supabase
         .from('commissions')
-        .update({ 
-          status: 'paid', 
-          paid_at: new Date().toISOString() 
+        .update({
+          status: 'paid',
+          paid_at: new Date().toISOString()
         })
         .eq('id', commissionId)
 
@@ -188,11 +203,11 @@ export default function CommissionsPage() {
 
       setCommissions(prev => prev.map(commission =>
         commission.id === commissionId
-          ? { 
-              ...commission, 
-              status: 'paid' as const, 
-              paid_at: new Date().toISOString() 
-            }
+          ? {
+            ...commission,
+            status: 'paid' as const,
+            paid_at: new Date().toISOString()
+          }
           : commission
       ))
 
@@ -261,17 +276,17 @@ export default function CommissionsPage() {
 
   // Filtrar comissões
   const filteredCommissions = commissions.filter(commission => {
-    const matchesSearch = !searchTerm || 
+    const matchesSearch = !searchTerm ||
       commission.leads?.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       commission.leads?.phone.includes(searchTerm) ||
       commission.users?.full_name.toLowerCase().includes(searchTerm.toLowerCase())
-    
+
     const matchesStatus = !statusFilter || commission.status === statusFilter
     const matchesType = !typeFilter || commission.type === typeFilter
-    
-    const matchesDate = !dateFilter || 
+
+    const matchesDate = !dateFilter ||
       new Date(commission.created_at).toDateString() === new Date(dateFilter).toDateString()
-    
+
     return matchesSearch && matchesStatus && matchesType && matchesDate
   })
 
@@ -294,13 +309,13 @@ export default function CommissionsPage() {
             {profile?.role === 'consultant' ? 'Minhas Comissões' : 'Comissões'}
           </h1>
           <p className="text-secondary-600">
-            {profile?.role === 'consultant' 
+            {profile?.role === 'consultant'
               ? 'Acompanhe seus ganhos e comissões'
               : 'Gerencie todas as comissões da clínica'
             }
           </p>
         </div>
-        
+
         {canManageCommissions && (
           <button className="btn btn-secondary">
             <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
@@ -328,6 +343,9 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.totalPending.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
+                <p className="text-xs text-secondary-400">
+                  {commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
+                </p>
               </div>
             </div>
           </div>
@@ -351,6 +369,9 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.totalPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
+                <p className="text-xs text-secondary-400">
+                  {commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
+                </p>
               </div>
             </div>
           </div>
@@ -366,13 +387,16 @@ export default function CommissionsPage() {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <BanknotesIcon className="w-4 h-4 text-primary-600" />
+                  <TrophyIcon className="w-4 h-4 text-primary-600" />
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Média</p>
+                <p className="text-xs font-medium text-secondary-500">Total Arcadas</p>
                 <p className="text-sm font-bold text-secondary-900">
-                  R$ {stats.averageCommission.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  {commissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)}
+                </p>
+                <p className="text-xs text-secondary-400">
+                  Vendidas no período
                 </p>
               </div>
             </div>
@@ -397,6 +421,14 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.monthlyEarnings.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
+                <p className="text-xs text-secondary-400">
+                  {commissions.filter(c => {
+                    const commissionDate = new Date(c.created_at)
+                    const currentMonth = new Date()
+                    return commissionDate.getMonth() === currentMonth.getMonth() &&
+                      commissionDate.getFullYear() === currentMonth.getFullYear()
+                  }).reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
+                </p>
               </div>
             </div>
           </div>
@@ -411,14 +443,17 @@ export default function CommissionsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <ChartBarIcon className="w-4 h-4 text-primary-600" />
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <StarIcon className="w-4 h-4 text-warning-600" />
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Taxa Pagamento</p>
+                <p className="text-xs font-medium text-secondary-500">Bônus Ganhos</p>
                 <p className="text-sm font-bold text-secondary-900">
-                  {stats.conversionRate.toFixed(1)}%
+                  {commissions.reduce((sum, c) => sum + (c.bonus_conquistados || 0), 0)}
+                </p>
+                <p className="text-xs text-secondary-400">
+                  R$ {commissions.reduce((sum, c) => sum + (c.valor_bonus || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
               </div>
             </div>
@@ -442,6 +477,9 @@ export default function CommissionsPage() {
                 <p className="text-xs font-medium text-secondary-500">Cancelado</p>
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.totalCancelled.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-xs text-secondary-400">
+                  {commissions.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
                 </p>
               </div>
             </div>
@@ -468,7 +506,7 @@ export default function CommissionsPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            
+
             <select
               className="input"
               value={statusFilter}
@@ -489,14 +527,14 @@ export default function CommissionsPage() {
               <option value="consultant">Consultor</option>
               <option value="manager">Gerente</option>
             </select>
-            
+
             <input
               type="date"
               className="input"
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
             />
-            
+
             <button
               onClick={() => {
                 setSearchTerm('')
@@ -526,7 +564,8 @@ export default function CommissionsPage() {
                 <tr>
                   <th>Lead</th>
                   {profile?.role !== 'consultant' && <th>Consultor</th>}
-                  <th>Valor</th>
+                  <th>Arcadas Vendidas</th>
+                  <th>Valor Total</th>
                   <th>Tipo</th>
                   <th>Status</th>
                   <th>Data</th>
@@ -545,9 +584,9 @@ export default function CommissionsPage() {
                           {commission.leads?.phone}
                         </div>
                         <div className="text-xs text-secondary-400">
-                          Lead: {commission.leads?.status === 'converted' ? 'Convertido' : 
-                                commission.leads?.status === 'lost' ? 'Perdido' :
-                                commission.leads?.status === 'contacted' ? 'Contatado' :
+                          Lead: {commission.leads?.status === 'converted' ? 'Convertido' :
+                            commission.leads?.status === 'lost' ? 'Perdido' :
+                              commission.leads?.status === 'contacted' ? 'Contatado' :
                                 commission.leads?.status === 'scheduled' ? 'Agendado' : 'Novo'}
                         </div>
                       </div>
@@ -563,12 +602,22 @@ export default function CommissionsPage() {
                       </td>
                     )}
                     <td>
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-primary-600">
+                          {commission.leads?.arcadas_vendidas || 1}
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          {(commission.leads?.arcadas_vendidas || 1) === 1 ? 'Superior OU Inferior' : 'Superior E Inferior'}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
                       <div>
-                        <div className="font-medium text-secondary-900">
+                        <div className="text-lg font-bold text-success-600">
                           R$ {commission.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </div>
                         <div className="text-xs text-secondary-500">
-                          {commission.percentage}% de comissão
+                          {commission.type === 'consultant' ? 'Valor para consultor' : 'Valor para manager'}
                         </div>
                       </div>
                     </td>
@@ -582,7 +631,7 @@ export default function CommissionsPage() {
                         {getStatusIcon(commission.status)}
                         <span className="ml-1">
                           {commission.status === 'pending' ? 'Pendente' :
-                           commission.status === 'paid' ? 'Pago' : 'Cancelado'}
+                            commission.status === 'paid' ? 'Pago' : 'Cancelado'}
                         </span>
                       </span>
                     </td>
@@ -634,7 +683,7 @@ export default function CommissionsPage() {
                 ))}
               </tbody>
             </table>
-            
+
             {filteredCommissions.length === 0 && (
               <div className="text-center py-12">
                 <CurrencyDollarIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
@@ -642,8 +691,8 @@ export default function CommissionsPage() {
                   {commissions.length === 0 ? 'Nenhuma comissão encontrada' : 'Nenhum resultado encontrado'}
                 </h3>
                 <p className="text-sm text-secondary-500">
-                  {commissions.length === 0 
-                    ? 'As comissões aparecerão aqui quando leads forem criados.'
+                  {commissions.length === 0
+                    ? 'As comissões aparecerão aqui quando leads forem convertidos.'
                     : 'Tente ajustar os filtros ou termo de busca.'
                   }
                 </p>

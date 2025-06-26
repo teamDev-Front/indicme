@@ -74,37 +74,94 @@ export default function SettingsPage() {
   }, [profile])
 
   useEffect(() => {
-    setHasChanges(true)
-  }, [commissionSettings.valor_por_arcada, commissionSettings.bonus_a_cada_arcadas, commissionSettings.valor_bonus])
+    // Só marcar como alterado se realmente houve mudança nos valores
+    const hasActualChanges =
+      commissionSettings.valor_por_arcada !== 750 ||
+      commissionSettings.bonus_a_cada_arcadas !== 7 ||
+      commissionSettings.valor_bonus !== 750
+
+    setHasChanges(hasActualChanges)
+  }, [
+    commissionSettings.valor_por_arcada,
+    commissionSettings.bonus_a_cada_arcadas,
+    commissionSettings.valor_bonus
+  ])
+
+  // E corrigir a função calculatePreview para ser mais robusta:
+  const calculatePreview = () => {
+    const arcadasVendidas = previewArcadas || 0
+    const valorPorArcada = commissionSettings.valor_por_arcada || 750
+    const bonusACada = commissionSettings.bonus_a_cada_arcadas || 7
+    const valorBonus = commissionSettings.valor_bonus || 750
+
+    // Calcular valor base (arcadas × valor)
+    const valorBase = arcadasVendidas * valorPorArcada
+
+    // Calcular quantos bônus ganhou
+    const quantidadeBonus = bonusACada > 0 ? Math.floor(arcadasVendidas / bonusACada) : 0
+    const valorTotalBonus = quantidadeBonus * valorBonus
+
+    // Próximo bônus
+    const arcadasParaProximoBonus = bonusACada > 0 ? bonusACada - (arcadasVendidas % bonusACada) : 0
+    const proximoBonus = arcadasParaProximoBonus === bonusACada ? 0 : arcadasParaProximoBonus
+
+    return {
+      arcadasVendidas,
+      valorPorArcada,
+      valorBase,
+      quantidadeBonus,
+      valorTotalBonus,
+      valorTotal: valorBase + valorTotalBonus,
+      proximoBonus,
+      proximoBonusEm: proximoBonus > 0 ? arcadasVendidas + proximoBonus : (arcadasVendidas + bonusACada)
+    }
+  }
 
   const fetchSettings = async () => {
     try {
       setLoading(true)
-      
+
       // Buscar clínica do usuário
-      const { data: userClinic } = await supabase
+      const { data: userClinic, error: userClinicError } = await supabase
         .from('user_clinics')
         .select('clinic_id')
         .eq('user_id', profile?.id)
         .single()
 
-      if (!userClinic) return
+      if (userClinicError || !userClinic) {
+        console.error('Erro ao buscar clínica do usuário:', userClinicError)
+        throw new Error('Usuário não está associado a uma clínica')
+      }
 
       // Buscar configurações de comissão
       const { data: commissionData, error: commissionError } = await supabase
         .from('commission_settings')
         .select('*')
         .eq('clinic_id', userClinic.clinic_id)
-        .single()
+        .maybeSingle() // Usar maybeSingle ao invés de single para não dar erro se não existir
 
       if (commissionError && commissionError.code !== 'PGRST116') {
+        console.error('Erro ao buscar configurações de comissão:', commissionError)
         throw commissionError
       }
 
       if (commissionData) {
-        setCommissionSettings(commissionData)
+        setCommissionSettings({
+          ...commissionData,
+          // Garantir que os valores sejam números
+          valor_por_arcada: Number(commissionData.valor_por_arcada) || 750,
+          bonus_a_cada_arcadas: Number(commissionData.bonus_a_cada_arcadas) || 7,
+          valor_bonus: Number(commissionData.valor_bonus) || 750,
+        })
       } else {
-        setCommissionSettings(prev => ({ ...prev, clinic_id: userClinic.clinic_id }))
+        // Se não existe configuração, usar valores padrão
+        setCommissionSettings(prev => ({
+          ...prev,
+          clinic_id: userClinic.clinic_id,
+          valor_por_arcada: 750,
+          bonus_a_cada_arcadas: 7,
+          valor_bonus: 750,
+        }))
       }
 
       // Buscar dados da clínica
@@ -112,15 +169,18 @@ export default function SettingsPage() {
         .from('clinics')
         .select('*')
         .eq('id', userClinic.clinic_id)
-        .single()
+        .maybeSingle()
 
-      if (clinicError) throw clinicError
-      if (clinicData) setClinicSettings(clinicData)
+      if (clinicError) {
+        console.error('Erro ao buscar dados da clínica:', clinicError)
+      } else if (clinicData) {
+        setClinicSettings(clinicData)
+      }
 
       setHasChanges(false)
     } catch (error: any) {
       console.error('Erro ao buscar configurações:', error)
-      toast.error('Erro ao carregar configurações')
+      toast.error(`Erro ao carregar configurações: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -130,41 +190,83 @@ export default function SettingsPage() {
     try {
       setSaving(true)
 
+      // Validar valores
+      if (!commissionSettings.valor_por_arcada || commissionSettings.valor_por_arcada <= 0) {
+        toast.error('Valor por arcada deve ser maior que zero')
+        return
+      }
+
+      if (!commissionSettings.bonus_a_cada_arcadas || commissionSettings.bonus_a_cada_arcadas <= 0) {
+        toast.error('Quantidade de arcadas para bônus deve ser maior que zero')
+        return
+      }
+
+      if (!commissionSettings.valor_bonus || commissionSettings.valor_bonus <= 0) {
+        toast.error('Valor do bônus deve ser maior que zero')
+        return
+      }
+
+      if (!commissionSettings.clinic_id) {
+        toast.error('ID da clínica não encontrado')
+        return
+      }
+
+      const dataToSave = {
+        clinic_id: commissionSettings.clinic_id,
+        valor_por_arcada: Number(commissionSettings.valor_por_arcada),
+        bonus_a_cada_arcadas: Number(commissionSettings.bonus_a_cada_arcadas),
+        valor_bonus: Number(commissionSettings.valor_bonus),
+      }
+
       if (commissionSettings.id) {
+        // Atualizar existente
         const { error } = await supabase
           .from('commission_settings')
           .update({
-            valor_por_arcada: commissionSettings.valor_por_arcada,
-            bonus_a_cada_arcadas: commissionSettings.bonus_a_cada_arcadas,
-            valor_bonus: commissionSettings.valor_bonus,
+            ...dataToSave,
             updated_at: new Date().toISOString()
           })
           .eq('id', commissionSettings.id)
 
         if (error) throw error
       } else {
+        // Inserir novo
         const { data, error } = await supabase
           .from('commission_settings')
-          .insert({
-            clinic_id: commissionSettings.clinic_id,
-            valor_por_arcada: commissionSettings.valor_por_arcada,
-            bonus_a_cada_arcadas: commissionSettings.bonus_a_cada_arcadas,
-            valor_bonus: commissionSettings.valor_bonus,
-          })
+          .insert(dataToSave)
           .select()
           .single()
 
         if (error) throw error
-        setCommissionSettings(data)
+
+        if (data) {
+          setCommissionSettings(prev => ({ ...prev, ...data }))
+        }
       }
 
       setHasChanges(false)
       toast.success('Configurações de comissão salvas com sucesso!')
     } catch (error: any) {
       console.error('Erro ao salvar configurações:', error)
-      toast.error('Erro ao salvar configurações')
+      toast.error(`Erro ao salvar configurações: ${error.message}`)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Também adicione esta função de validação de entrada:
+  const handleNumberInput = (value: string, field: keyof CommissionSettings) => {
+    const numValue = parseFloat(value)
+    if (!isNaN(numValue) && numValue >= 0) {
+      setCommissionSettings(prev => ({
+        ...prev,
+        [field]: numValue
+      }))
+    } else if (value === '') {
+      setCommissionSettings(prev => ({
+        ...prev,
+        [field]: 0
+      }))
     }
   }
 
@@ -205,36 +307,7 @@ export default function SettingsPage() {
       setSaving(false)
     }
   }
-
-  const calculatePreview = () => {
-    const arcadasVendidas = previewArcadas
-    const valorPorArcada = commissionSettings.valor_por_arcada
-    const bonusACada = commissionSettings.bonus_a_cada_arcadas
-    const valorBonus = commissionSettings.valor_bonus
-
-    // Calcular valor base (arcadas × valor)
-    const valorBase = arcadasVendidas * valorPorArcada
-
-    // Calcular quantos bônus ganhou
-    const quantidadeBonus = Math.floor(arcadasVendidas / bonusACada)
-    const valorTotalBonus = quantidadeBonus * valorBonus
-
-    // Próximo bônus
-    const arcadasParaProximoBonus = bonusACada - (arcadasVendidas % bonusACada)
-    const proximoBonus = arcadasParaProximoBonus === bonusACada ? 0 : arcadasParaProximoBonus
-
-    return {
-      arcadasVendidas,
-      valorPorArcada,
-      valorBase,
-      quantidadeBonus,
-      valorTotalBonus,
-      valorTotal: valorBase + valorTotalBonus,
-      proximoBonus,
-      proximoBonusEm: proximoBonus > 0 ? arcadasVendidas + proximoBonus : (arcadasVendidas + bonusACada)
-    }
-  }
-
+  
   const preview = calculatePreview()
 
   const tabs = [
@@ -284,11 +357,10 @@ export default function SettingsPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === tab.id
-                  ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-secondary-500 hover:text-secondary-700 hover:border-secondary-300'
-              }`}
+              className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-secondary-500 hover:text-secondary-700 hover:border-secondary-300'
+                }`}
             >
               <tab.icon className="h-4 w-4 mr-2" />
               {tab.name}
@@ -311,7 +383,7 @@ export default function SettingsPage() {
               <div>
                 <h3 className="text-sm font-medium text-warning-800">Sistema de Comissões por Arcadas</h3>
                 <p className="text-sm text-warning-700 mt-1">
-                  O sistema calcula comissões fixas por arcada vendida, com bônus progressivos. 
+                  O sistema calcula comissões fixas por arcada vendida, com bônus progressivos.
                   As alterações afetarão apenas os novos leads convertidos.
                 </p>
               </div>
@@ -346,11 +418,9 @@ export default function SettingsPage() {
                       step="0.01"
                       min="0"
                       className="input pl-10"
-                      value={commissionSettings.valor_por_arcada}
-                      onChange={(e) => setCommissionSettings(prev => ({ 
-                        ...prev, 
-                        valor_por_arcada: parseFloat(e.target.value) || 0 
-                      }))}
+                      value={commissionSettings.valor_por_arcada || ''}
+                      onChange={(e) => handleNumberInput(e.target.value, 'valor_por_arcada')}
+                      placeholder="750.00"
                     />
                   </div>
                   <p className="text-xs text-secondary-500 mt-1">
@@ -366,11 +436,22 @@ export default function SettingsPage() {
                     type="number"
                     min="1"
                     className="input"
-                    value={commissionSettings.bonus_a_cada_arcadas}
-                    onChange={(e) => setCommissionSettings(prev => ({ 
-                      ...prev, 
-                      bonus_a_cada_arcadas: parseInt(e.target.value) || 1 
-                    }))}
+                    value={commissionSettings.bonus_a_cada_arcadas || ''}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value)
+                      if (!isNaN(value) && value > 0) {
+                        setCommissionSettings(prev => ({
+                          ...prev,
+                          bonus_a_cada_arcadas: value
+                        }))
+                      } else if (e.target.value === '') {
+                        setCommissionSettings(prev => ({
+                          ...prev,
+                          bonus_a_cada_arcadas: 1
+                        }))
+                      }
+                    }}
+                    placeholder="7"
                   />
                   <p className="text-xs text-secondary-500 mt-1">
                     A cada quantas arcadas o consultor ganha bônus
@@ -390,11 +471,9 @@ export default function SettingsPage() {
                       step="0.01"
                       min="0"
                       className="input pl-10"
-                      value={commissionSettings.valor_bonus}
-                      onChange={(e) => setCommissionSettings(prev => ({ 
-                        ...prev, 
-                        valor_bonus: parseFloat(e.target.value) || 0 
-                      }))}
+                      value={commissionSettings.valor_bonus || ''}
+                      onChange={(e) => handleNumberInput(e.target.value, 'valor_bonus')}
+                      placeholder="750.00"
                     />
                   </div>
                   <p className="text-xs text-secondary-500 mt-1">
@@ -405,10 +484,10 @@ export default function SettingsPage() {
                 <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
                   <h4 className="text-sm font-medium text-primary-900 mb-2">Como Funciona</h4>
                   <ul className="text-sm text-primary-700 space-y-1">
-                    <li>• Cada arcada vendida = R$ {commissionSettings.valor_por_arcada.toFixed(2)}</li>
-                    <li>• A cada {commissionSettings.bonus_a_cada_arcadas} arcadas = +R$ {commissionSettings.valor_bonus.toFixed(2)} de bônus</li>
-                    <li>• Exemplo: 7 arcadas = R$ {(7 * commissionSettings.valor_por_arcada + commissionSettings.valor_bonus).toFixed(2)} total</li>
-                    <li>• Exemplo: 14 arcadas = R$ {(14 * commissionSettings.valor_por_arcada + 2 * commissionSettings.valor_bonus).toFixed(2)} total</li>
+                    <li>• Cada arcada vendida = R$ {(commissionSettings.valor_por_arcada || 750).toFixed(2)}</li>
+                    <li>• A cada {commissionSettings.bonus_a_cada_arcadas || 7} arcadas = +R$ {(commissionSettings.valor_bonus || 750).toFixed(2)} de bônus</li>
+                    <li>• Exemplo: 7 arcadas = R$ {(7 * (commissionSettings.valor_por_arcada || 750) + (commissionSettings.valor_bonus || 750)).toFixed(2)} total</li>
+                    <li>• Exemplo: 14 arcadas = R$ {(14 * (commissionSettings.valor_por_arcada || 750) + 2 * (commissionSettings.valor_bonus || 750)).toFixed(2)} total</li>
                   </ul>
                 </div>
 
@@ -513,15 +592,14 @@ export default function SettingsPage() {
                         const arcadas = multiplicador * commissionSettings.bonus_a_cada_arcadas
                         const valor = (arcadas * commissionSettings.valor_por_arcada) + (multiplicador * commissionSettings.valor_bonus)
                         const atingido = preview.arcadasVendidas >= arcadas
-                        
+
                         return (
-                          <div 
+                          <div
                             key={multiplicador}
-                            className={`p-2 rounded text-center ${
-                              atingido 
-                                ? 'bg-success-100 text-success-800 border border-success-300' 
-                                : 'bg-white text-secondary-600 border border-secondary-200'
-                            }`}
+                            className={`p-2 rounded text-center ${atingido
+                              ? 'bg-success-100 text-success-800 border border-success-300'
+                              : 'bg-white text-secondary-600 border border-secondary-200'
+                              }`}
                           >
                             <div className="font-medium">{arcadas}</div>
                             <div>R$ {valor.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</div>

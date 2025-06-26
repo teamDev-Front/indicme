@@ -65,148 +65,155 @@ export default function ConsultantsPage() {
     }
   }, [profile])
 
- const fetchConsultants = async () => {
-  try {
-    setLoading(true)
+  const fetchConsultants = async () => {
+    try {
+      setLoading(true)
 
-    // Buscar clínica do usuário
-    const { data: userClinic } = await supabase
-      .from('user_clinics')
-      .select('clinic_id')
-      .eq('user_id', profile?.id)
-      .single()
+      // Buscar clínica do usuário
+      const { data: userClinic } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile?.id)
+        .single()
 
-    if (!userClinic) return
+      if (!userClinic) return
 
-    let consultantsQuery = supabase
-      .from('users')
-      .select(`
+      let consultantsQuery = supabase
+        .from('users')
+        .select(`
         *,
         user_clinics!inner(clinic_id)
       `)
-      .eq('user_clinics.clinic_id', userClinic.clinic_id)
-      .in('role', ['consultant', 'manager'])
-      .order('created_at', { ascending: false })
+        .eq('user_clinics.clinic_id', userClinic.clinic_id)
+        .in('role', ['consultant', 'manager'])
+        .order('created_at', { ascending: false })
 
-    // Se for manager, mostrar apenas consultores da sua equipe
-    if (profile?.role === 'manager') {
-      const { data: hierarchy } = await supabase
-        .from('hierarchies')
-        .select('consultant_id')
-        .eq('manager_id', profile.id)
+      // Se for manager, mostrar apenas consultores da sua equipe
+      if (profile?.role === 'manager') {
+        const { data: hierarchy } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
 
-      const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-      if (consultantIds.length > 0) {
-        consultantsQuery = consultantsQuery.in('id', consultantIds)
-      } else {
-        setConsultants([])
-        setLoading(false)
-        return
+        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+        if (consultantIds.length > 0) {
+          consultantsQuery = consultantsQuery.in('id', consultantIds)
+        } else {
+          setConsultants([])
+          setLoading(false)
+          return
+        }
       }
-    }
 
-    const { data: consultantsData, error } = await consultantsQuery
+      const { data: consultantsData, error } = await consultantsQuery
 
-    if (error) throw error
+      if (error) throw error
 
-    const consultantsWithStats = await Promise.all(
-      (consultantsData || []).map(async (consultant) => {
-        const [leadsCount, managerData, userEstablishments] = await Promise.all([
-          supabase
-            .from('leads')
-            .select('id', { count: 'exact' })
-            .eq('indicated_by', consultant.id),
-          supabase
-            .from('hierarchies')
-            .select(`
+      const consultantsWithStats = await Promise.all(
+        (consultantsData || []).map(async (consultant) => {
+          const [leadsCount, managerData, userEstablishments] = await Promise.all([
+            supabase
+              .from('leads')
+              .select('id', { count: 'exact' })
+              .eq('indicated_by', consultant.id),
+            supabase
+              .from('hierarchies')
+              .select(`
               manager_id,
               users!hierarchies_manager_id_fkey (
                 id,
                 full_name
               )
             `)
-            .eq('consultant_id', consultant.id)
-            .single(),
-          // CORREÇÃO: Query corrigida - establishment_codes é relacionamento 1:1
-          supabase
-            .from('user_establishments')
-            .select(`
+              .eq('consultant_id', consultant.id)
+              .single(),
+            // CORREÇÃO: Query simplificada para estabelecimentos
+            supabase
+              .from('user_establishments')
+              .select(`
               establishment_code,
-              establishment_codes!user_establishments_establishment_code_fkey (
+              establishment_codes (
                 name
               )
             `)
-            .eq('user_id', consultant.id)
-            .eq('status', 'active')
-        ])
+              .eq('user_id', consultant.id)
+              .eq('status', 'active')
+          ])
 
-        // Calcular total de arcadas vendidas
-        const { data: leadsData } = await supabase
-          .from('leads')
-          .select('arcadas_vendidas')
-          .eq('indicated_by', consultant.id)
-          .eq('status', 'converted')
+          // Calcular total de arcadas vendidas
+          const { data: leadsData } = await supabase
+            .from('leads')
+            .select('arcadas_vendidas')
+            .eq('indicated_by', consultant.id)
+            .eq('status', 'converted')
 
-        const totalArcadas = leadsData?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
+          const totalArcadas = leadsData?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
 
-        // CORREÇÃO: Processar estabelecimentos corretamente
-        const establishmentNames = userEstablishments.data?.map(est => {
-          // CORREÇÃO: establishment_codes é um objeto único, não array
-          const establishmentData = est.establishment_codes
-          if (establishmentData && typeof establishmentData === 'object' && 'name' in establishmentData) {
-            return establishmentData.name || 'Estabelecimento'
-          }
-          return 'Estabelecimento'
-        }) || []
+          // CORREÇÃO: Processar estabelecimentos de forma mais robusta
+          const establishmentNames = []
 
-        // Se não tem estabelecimentos, adicionar placeholder
-        if (establishmentNames.length === 0) {
-          establishmentNames.push('Sem estabelecimento')
-        }
-
-        // Se o consultor tem manager, buscar info do manager
-        let managerInfo = null
-        if (managerData.data?.users) {
-          const manager = Array.isArray(managerData.data.users) ? managerData.data.users[0] : managerData.data.users
-          if (manager && manager.full_name) {
-            managerInfo = {
-              id: manager.id,
-              full_name: manager.full_name,
-              establishment_name: establishmentNames[0] // Usar primeiro estabelecimento
+          if (userEstablishments.data && userEstablishments.data.length > 0) {
+            for (const est of userEstablishments.data) {
+              if (est.establishment_codes && est.establishment_codes.length > 0) {
+                establishmentNames.push(est.establishment_codes[0].name)
+              } else if (est?.establishment_code) {
+                // Fallback: usar o código se não tiver nome
+                establishmentNames.push(`Estabelecimento ${est.establishment_code}`)
+              }
             }
           }
-        }
 
-        return {
-          ...consultant,
-          establishment_count: establishmentNames.length,
-          establishment_names: establishmentNames,
-          _count: {
-            leads: leadsCount.count || 0,
-            arcadas_vendidas: totalArcadas,
-          },
-          manager: managerInfo
-        }
+          // Se não tem estabelecimentos, adicionar placeholder
+          if (establishmentNames.length === 0) {
+            establishmentNames.push('Sem estabelecimento')
+          }
+
+          // Se o consultor tem manager, buscar info do manager
+          let managerInfo = null
+          if (managerData.data?.users) {
+            const manager = Array.isArray(managerData.data.users) ? managerData.data.users[0] : managerData.data.users
+            if (manager && manager.full_name) {
+              managerInfo = {
+                id: manager.id,
+                full_name: manager.full_name,
+                establishment_name: establishmentNames[0] // Usar primeiro estabelecimento
+              }
+            }
+          }
+
+          return {
+            ...consultant,
+            establishment_count: establishmentNames.length,
+            establishment_names: establishmentNames,
+            _count: {
+              leads: leadsCount.count || 0,
+              arcadas_vendidas: totalArcadas,
+            },
+            manager: managerInfo
+          }
+        })
+      )
+
+      setConsultants(consultantsWithStats)
+
+      // Extrair estabelecimentos únicos para o filtro
+      const allEstablishments = new Set<string>()
+      consultantsWithStats.forEach(consultant => {
+        consultant.establishment_names?.forEach((establishment: string) => {
+          if (establishment && establishment !== 'Sem estabelecimento') {
+            allEstablishments.add(establishment)
+          }
+        })
       })
-    )
+      setEstablishments(Array.from(allEstablishments).sort())
 
-    setConsultants(consultantsWithStats)
-
-    // Extrair estabelecimentos únicos para o filtro
-    const allEstablishments = new Set<string>()
-    consultantsWithStats.forEach(consultant => {
-      consultant.establishment_names?.forEach((establishment: string) => allEstablishments.add(establishment))
-    })
-    setEstablishments(Array.from(allEstablishments).sort())
-
-  } catch (error: any) {
-    console.error('Erro ao buscar consultores:', error)
-    toast.error('Erro ao carregar consultores')
-  } finally {
-    setLoading(false)
+    } catch (error: any) {
+      console.error('Erro ao buscar consultores:', error)
+      toast.error('Erro ao carregar consultores')
+    } finally {
+      setLoading(false)
+    }
   }
-}
-
   const handleStatusChange = async (consultantId: string, newStatus: string) => {
     try {
       const { error } = await supabase
@@ -261,7 +268,7 @@ export default function ConsultantsPage() {
 
     const matchesEstablishment = !establishmentFilter || consultant.establishment_names?.includes(establishmentFilter)
 
-    const matchesEstablishmentCount = !establishmentCountFilter || 
+    const matchesEstablishmentCount = !establishmentCountFilter ||
       (establishmentCountFilter === '1' && consultant.establishment_count === 1) ||
       (establishmentCountFilter === '2' && consultant.establishment_count === 2) ||
       (establishmentCountFilter === '3+' && (consultant.establishment_count || 0) >= 3)
@@ -639,8 +646,8 @@ export default function ConsultantsPage() {
                           value={consultant.status}
                           onChange={(e) => handleStatusChange(consultant.id, e.target.value)}
                           className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${consultant.status === 'active' ? 'badge-success' :
-                              consultant.status === 'inactive' ? 'badge-danger' :
-                                'badge-warning'
+                            consultant.status === 'inactive' ? 'badge-danger' :
+                              'badge-warning'
                             }`}
                         >
                           <option value="active">Ativo</option>
@@ -649,8 +656,8 @@ export default function ConsultantsPage() {
                         </select>
                       ) : (
                         <span className={`badge ${consultant.status === 'active' ? 'badge-success' :
-                            consultant.status === 'inactive' ? 'badge-danger' :
-                              'badge-warning'
+                          consultant.status === 'inactive' ? 'badge-danger' :
+                            'badge-warning'
                           }`}>
                           {consultant.status === 'active' ? 'Ativo' :
                             consultant.status === 'inactive' ? 'Inativo' :

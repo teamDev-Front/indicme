@@ -1,5 +1,4 @@
-// src/app/dashboard/managers/page.tsx - VERSÃO CORRIGIDA
-
+// src/app/dashboard/managers/page.tsx - VERSÃO LIMPA E FUNCIONAL
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -35,13 +34,13 @@ interface Manager {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
-  establishment_name?: string
-  _count?: {
+  establishment_name: string
+  _count: {
     consultants: number
     leads: number
     commissions: number
   }
-  _stats?: {
+  _stats: {
     totalCommissions: number
     conversionRate: number
   }
@@ -53,7 +52,7 @@ export default function ManagersPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [establishmentFilter, setEstablishmentFilter] = useState('') // CORRIGIDO: nome consistente
+  const [establishmentFilter, setEstablishmentFilter] = useState('')
   const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -66,7 +65,7 @@ export default function ManagersPage() {
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
-  const [establishments, setEstablishments] = useState<string[]>([]) // CORRIGIDO: nome consistente
+  const [establishments, setEstablishments] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
@@ -88,96 +87,98 @@ export default function ManagersPage() {
 
       if (!userClinic) return
 
+      // Buscar managers
       const { data: managersData, error } = await supabase
         .from('users')
         .select(`
-        *,
-        user_clinics!inner(clinic_id)
-      `)
+          *,
+          user_clinics!inner(clinic_id)
+        `)
         .eq('user_clinics.clinic_id', userClinic.clinic_id)
         .eq('role', 'manager')
         .order('created_at', { ascending: false })
 
       if (error) throw error
 
-      // Buscar estatísticas para cada gerente
+      // Para cada manager, buscar estatísticas
       const managersWithStats = await Promise.all(
         (managersData || []).map(async (manager) => {
           try {
-            const [consultantsResult, leadsResult, commissionsResult, managerEstablishments] = await Promise.all([
-              // Contar consultores sob este gerente
-              supabase
-                .from('hierarchies')
-                .select('consultant_id', { count: 'exact' })
-                .eq('manager_id', manager.id),
+            // Buscar estabelecimento do manager - SIMPLES
+            let establishmentName = 'Estabelecimento não definido'
+            
+            const { data: userEst } = await supabase
+              .from('user_establishments')
+              .select('establishment_code')
+              .eq('user_id', manager.id)
+              .eq('status', 'active')
+              .limit(1)
+              .single()
 
-              // Contar leads usando a função SQL
-              supabase.rpc('get_manager_leads_count', { manager_user_id: manager.id }),
-
-              // Buscar comissões pagas deste gerente
-              supabase
-                .from('commissions')
-                .select('amount, status')
-                .eq('user_id', manager.id),
-
-              // CORREÇÃO: Query corrigida - establishment_codes é relacionamento 1:1
-              supabase
-                .from('user_establishments')
-                .select(`
-                establishment_code,
-                establishment_codes!user_establishments_establishment_code_fkey (
-                  name
-                )
-              `)
-                .eq('user_id', manager.id)
-                .eq('status', 'active')
-                .limit(1) // Pegar apenas o primeiro para display
-            ])
-
-            const consultantsCount = consultantsResult?.count || 0
-            const leadsCount = typeof leadsResult?.data === 'number' ? leadsResult.data : 0
-            const commissionsData = commissionsResult?.data || []
-
-            const totalCommissions = commissionsData
-              .filter(c => c?.status === 'paid')
-              .reduce((sum, c) => sum + (c?.amount || 0), 0)
-
-            let establishmentName: string = 'Estabelecimento não definido'
-            if (managerEstablishments.data && managerEstablishments.data.length > 0) {
-              const firstEstablishment = managerEstablishments.data[0]
-
-              // CORREÇÃO: Tipagem mais específica e verificação robusta
-              const establishmentData = firstEstablishment.establishment_codes
-
-              if (
-                establishmentData &&
-                typeof establishmentData === 'object' &&
-                establishmentData !== null &&
-                'name' in establishmentData &&
-                typeof establishmentData.name === 'string'
-              ) {
-                establishmentName = establishmentData.name || 'Estabelecimento não definido'
+            if (userEst?.establishment_code) {
+              const { data: estData } = await supabase
+                .from('establishment_codes')
+                .select('name')
+                .eq('code', userEst.establishment_code)
+                .single()
+              
+              if (estData?.name) {
+                establishmentName = estData.name
               }
             }
+
+            // Contar consultores
+            const { count: consultantsCount } = await supabase
+              .from('hierarchies')
+              .select('consultant_id', { count: 'exact' })
+              .eq('manager_id', manager.id)
+
+            // Contar leads
+            const { data: hierarchy } = await supabase
+              .from('hierarchies')
+              .select('consultant_id')
+              .eq('manager_id', manager.id)
+
+            const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+            consultantIds.push(manager.id) // incluir próprios leads
+
+            const { count: leadsCount } = await supabase
+              .from('leads')
+              .select('id', { count: 'exact' })
+              .in('indicated_by', consultantIds)
+
+            // Buscar comissões
+            const { data: commissionsData } = await supabase
+              .from('commissions')
+              .select('amount, status')
+              .eq('user_id', manager.id)
+
+            const totalCommissions = commissionsData
+              ?.filter(c => c.status === 'paid')
+              ?.reduce((sum, c) => sum + c.amount, 0) || 0
+
+            const paidCommissionsCount = commissionsData
+              ?.filter(c => c.status === 'paid')?.length || 0
 
             return {
               ...manager,
               establishment_name: establishmentName,
               _count: {
-                consultants: consultantsCount,
-                leads: leadsCount,
-                commissions: commissionsData.filter(c => c?.status === 'paid').length,
+                consultants: consultantsCount || 0,
+                leads: leadsCount || 0,
+                commissions: paidCommissionsCount,
               },
               _stats: {
                 totalCommissions,
                 conversionRate: 0,
               }
-            }
-          } catch (statsError) {
-            console.error('Erro ao buscar estatísticas para gerente:', manager.id, statsError)
+            } as Manager
+
+          } catch (error) {
+            console.error('Erro ao buscar stats do manager:', manager.id, error)
             return {
               ...manager,
-              establishment_name: 'Estabelecimento não definido',
+              establishment_name: 'Erro ao carregar',
               _count: {
                 consultants: 0,
                 leads: 0,
@@ -187,17 +188,24 @@ export default function ManagersPage() {
                 totalCommissions: 0,
                 conversionRate: 0,
               }
-            }
+            } as Manager
           }
         })
       )
 
       setManagers(managersWithStats)
 
-      // Extrair estabelecimentos únicos para o filtro
-      const uniqueEstablishments = Array.from(
-        new Set(managersWithStats.map(m => m.establishment_name).filter(Boolean))
-      ).sort()
+      // Extrair estabelecimentos únicos - CORRIGIDO
+      const uniqueEstablishments = managersWithStats
+        .map(m => m.establishment_name)
+        .filter((name): name is string => 
+          name !== undefined && 
+          name !== 'Estabelecimento não definido' && 
+          name !== 'Erro ao carregar'
+        )
+        .filter((name, index, array) => array.indexOf(name) === index)
+        .sort()
+
       setEstablishments(uniqueEstablishments)
 
     } catch (error: any) {
@@ -207,6 +215,7 @@ export default function ManagersPage() {
       setLoading(false)
     }
   }
+
   const handleOpenModal = (mode: 'create' | 'edit', manager?: Manager) => {
     setModalMode(mode)
     if (mode === 'edit' && manager) {
@@ -216,11 +225,17 @@ export default function ManagersPage() {
         email: manager.email,
         phone: manager.phone || '',
         establishment_name: manager.establishment_name || '',
-        password: '', // Não mostrar senha existente
+        password: '',
       })
     } else {
       setSelectedManager(null)
-      setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
+      setFormData({ 
+        full_name: '', 
+        email: '', 
+        phone: '', 
+        establishment_name: '', 
+        password: '' 
+      })
     }
     setIsModalOpen(true)
   }
@@ -229,7 +244,6 @@ export default function ManagersPage() {
     try {
       setSubmitting(true)
 
-      // Buscar clínica do usuário
       const { data: userClinic } = await supabase
         .from('user_clinics')
         .select('clinic_id')
@@ -239,29 +253,22 @@ export default function ManagersPage() {
       if (!userClinic) throw new Error('Clínica não encontrada')
 
       if (modalMode === 'create') {
-        console.log('Criando gerente com dados:', formData)
-
-        // 1. Fazer signup normal
+        // Criar usuário
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: formData.email,
           password: formData.password,
           options: {
-            data: {
-              full_name: formData.full_name,
-            }
+            data: { full_name: formData.full_name }
           }
         })
 
-        if (signUpError) {
-          throw new Error(`Erro no cadastro: ${signUpError.message}`)
-        }
+        if (signUpError) throw signUpError
 
         if (signUpData.user) {
-          // 2. Aguardar um pouco para garantir que o usuário foi criado
           await new Promise(resolve => setTimeout(resolve, 1000))
 
-          // 3. Criar/atualizar perfil na tabela users
-          const { error: upsertError } = await supabase
+          // Criar perfil
+          const { error: profileError } = await supabase
             .from('users')
             .upsert({
               id: signUpData.user.id,
@@ -270,31 +277,21 @@ export default function ManagersPage() {
               phone: formData.phone || null,
               role: 'manager',
               status: 'active',
-            }, {
-              onConflict: 'id',
-              ignoreDuplicates: false
             })
 
-          if (upsertError) {
-            throw new Error(`Erro ao criar perfil: ${upsertError.message}`)
-          }
+          if (profileError) throw profileError
 
-          // 4. Associar à clínica
+          // Associar à clínica
           const { error: clinicError } = await supabase
             .from('user_clinics')
-            .upsert({
+            .insert({
               user_id: signUpData.user.id,
               clinic_id: userClinic.clinic_id,
-            }, {
-              onConflict: 'user_id,clinic_id',
-              ignoreDuplicates: true
             })
 
-          if (clinicError) {
-            throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
-          }
+          if (clinicError) throw clinicError
 
-          // 5. Se informou establishment_name, buscar e vincular ao estabelecimento
+          // Vincular estabelecimento se informado
           if (formData.establishment_name) {
             const { data: establishments } = await supabase
               .from('establishment_codes')
@@ -315,41 +312,32 @@ export default function ManagersPage() {
             }
           }
 
-          toast.success('Gerente criado com sucesso! Ele receberá um email de confirmação.')
-        } else {
-          throw new Error('Usuário não foi criado corretamente')
+          toast.success('Gerente criado com sucesso!')
         }
 
       } else {
-        // EDIÇÃO
+        // Editar
         if (!selectedManager) return
 
-        const updateData: any = {
-          full_name: formData.full_name,
-          phone: formData.phone || null,
-          updated_at: new Date().toISOString()
-        }
-
-        const { error: profileError } = await supabase
+        const { error } = await supabase
           .from('users')
-          .update(updateData)
+          .update({
+            full_name: formData.full_name,
+            phone: formData.phone || null,
+            updated_at: new Date().toISOString()
+          })
           .eq('id', selectedManager.id)
 
-        if (profileError) throw profileError
-
+        if (error) throw error
         toast.success('Gerente atualizado com sucesso!')
       }
 
       setIsModalOpen(false)
       setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
-
-      // Aguardar um pouco antes de recarregar
-      setTimeout(() => {
-        fetchManagers()
-      }, 1500)
+      setTimeout(() => fetchManagers(), 1000)
 
     } catch (error: any) {
-      console.error('Erro completo ao salvar gerente:', error)
+      console.error('Erro ao salvar gerente:', error)
       toast.error(error.message || 'Erro ao salvar gerente')
     } finally {
       setSubmitting(false)
@@ -384,22 +372,20 @@ export default function ManagersPage() {
     try {
       setSubmitting(true)
 
-      // Verificar se o gerente tem consultores associados
-      const { data: hierarchies, error: hierarchyError } = await supabase
+      // Verificar se tem consultores
+      const { data: hierarchies } = await supabase
         .from('hierarchies')
         .select('consultant_id')
         .eq('manager_id', selectedManager.id)
 
-      if (hierarchyError) throw hierarchyError
-
       if (hierarchies && hierarchies.length > 0) {
-        toast.error('Não é possível excluir um gerente que possui consultores associados. Remova os consultores primeiro.')
+        toast.error('Não é possível excluir um gerente que possui consultores associados.')
         return
       }
 
-      // Deletar usuário do auth
-      const { error: authError } = await supabase.auth.admin.deleteUser(selectedManager.id)
-      if (authError) throw authError
+      // Deletar usuário
+      const { error } = await supabase.auth.admin.deleteUser(selectedManager.id)
+      if (error) throw error
 
       toast.success('Gerente removido com sucesso!')
       setIsDeleteModalOpen(false)
@@ -417,10 +403,10 @@ export default function ManagersPage() {
     const matchesSearch = !searchTerm ||
       manager.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       manager.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      manager.establishment_name?.toLowerCase().includes(searchTerm.toLowerCase())
+      manager.establishment_name.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchesStatus = !statusFilter || manager.status === statusFilter
-    const matchesEstablishment = !establishmentFilter || manager.establishment_name === establishmentFilter // CORRIGIDO
+    const matchesEstablishment = !establishmentFilter || manager.establishment_name === establishmentFilter
 
     return matchesSearch && matchesStatus && matchesEstablishment
   })
@@ -429,9 +415,9 @@ export default function ManagersPage() {
     total: managers.length,
     active: managers.filter(m => m.status === 'active').length,
     inactive: managers.filter(m => m.status === 'inactive').length,
-    totalConsultants: managers.reduce((sum, m) => sum + (m._count?.consultants || 0), 0),
-    totalCommissions: managers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0),
-    totalEstablishments: establishments.length, // CORRIGIDO
+    totalConsultants: managers.reduce((sum, m) => sum + m._count.consultants, 0),
+    totalCommissions: managers.reduce((sum, m) => sum + m._stats.totalCommissions, 0),
+    totalEstablishments: establishments.length,
   }
 
   const canEdit = profile?.role === 'clinic_admin'
@@ -480,7 +466,7 @@ export default function ManagersPage() {
         )}
       </div>
 
-      {/* Enhanced Stats Cards */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -612,7 +598,7 @@ export default function ManagersPage() {
         </motion.div>
       </div>
 
-      {/* Enhanced Filters */}
+      {/* Filters */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -660,7 +646,7 @@ export default function ManagersPage() {
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
-                setEstablishmentFilter('') // CORRIGIDO
+                setEstablishmentFilter('')
               }}
               className="btn btn-secondary"
             >
@@ -671,7 +657,7 @@ export default function ManagersPage() {
         </div>
       </motion.div>
 
-      {/* Enhanced Managers Table */}
+      {/* Managers Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -719,7 +705,7 @@ export default function ManagersPage() {
                         <BuildingOfficeIcon className="h-4 w-4 text-primary-500 mr-2" />
                         <div>
                           <div className="text-sm font-medium text-primary-900">
-                            {manager.establishment_name || 'Não definida'}
+                            {manager.establishment_name}
                           </div>
                           <div className="text-xs text-secondary-500">
                             Estabelecimento responsável
@@ -745,13 +731,13 @@ export default function ManagersPage() {
                       <div className="flex items-center space-x-4">
                         <div className="text-center">
                           <div className="text-sm font-medium text-secondary-900">
-                            {manager._count?.consultants || 0}
+                            {manager._count.consultants}
                           </div>
                           <div className="text-xs text-secondary-500">Consultores</div>
                         </div>
                         <div className="text-center">
                           <div className="text-sm font-medium text-secondary-900">
-                            {manager._count?.leads || 0}
+                            {manager._count.leads}
                           </div>
                           <div className="text-xs text-secondary-500">Leads</div>
                         </div>
@@ -760,10 +746,10 @@ export default function ManagersPage() {
                     <td>
                       <div className="space-y-1">
                         <div className="text-sm font-medium text-success-600">
-                          R$ {(manager._stats?.totalCommissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          R$ {manager._stats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </div>
                         <div className="text-xs text-secondary-500">
-                          {manager._count?.commissions || 0} comissões pagas
+                          {manager._count.commissions} comissões pagas
                         </div>
                       </div>
                     </td>
@@ -772,20 +758,22 @@ export default function ManagersPage() {
                         <select
                           value={manager.status}
                           onChange={(e) => handleStatusChange(manager.id, e.target.value)}
-                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${manager.status === 'active' ? 'badge-success' :
+                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${
+                            manager.status === 'active' ? 'badge-success' :
                             manager.status === 'inactive' ? 'badge-danger' :
                               'badge-warning'
-                            }`}
+                          }`}
                         >
                           <option value="active">Ativo</option>
                           <option value="inactive">Inativo</option>
                           <option value="pending">Pendente</option>
                         </select>
                       ) : (
-                        <span className={`badge ${manager.status === 'active' ? 'badge-success' :
+                        <span className={`badge ${
+                          manager.status === 'active' ? 'badge-success' :
                           manager.status === 'inactive' ? 'badge-danger' :
                             'badge-warning'
-                          }`}>
+                        }`}>
                           {manager.status === 'active' ? 'Ativo' :
                             manager.status === 'inactive' ? 'Inativo' :
                               'Pendente'}
@@ -794,10 +782,7 @@ export default function ManagersPage() {
                     </td>
                     <td>
                       <div className="flex items-center space-x-2">
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          title="Visualizar"
-                        >
+                        <button className="btn btn-ghost btn-sm" title="Visualizar">
                           <EyeIcon className="h-4 w-4" />
                         </button>
                         {canEdit && (
