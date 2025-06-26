@@ -1,3 +1,5 @@
+// src/app/dashboard/managers/page.tsx - VERSÃO CORRIGIDA
+
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -33,7 +35,7 @@ interface Manager {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
-  gym_name?: string // Nova propriedade para academia
+  establishment_name?: string
   _count?: {
     consultants: number
     leads: number
@@ -51,7 +53,7 @@ export default function ManagersPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [gymFilter, setGymFilter] = useState('')
+  const [establishmentFilter, setEstablishmentFilter] = useState('') // CORRIGIDO: nome consistente
   const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -60,11 +62,11 @@ export default function ManagersPage() {
     full_name: '',
     email: '',
     phone: '',
-    gym_name: '',
+    establishment_name: '',
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
-  const [gyms, setGyms] = useState<string[]>([])
+  const [establishments, setEstablishments] = useState<string[]>([]) // CORRIGIDO: nome consistente
   const supabase = createClient()
 
   useEffect(() => {
@@ -89,9 +91,9 @@ export default function ManagersPage() {
       const { data: managersData, error } = await supabase
         .from('users')
         .select(`
-          *,
-          user_clinics!inner(clinic_id)
-        `)
+        *,
+        user_clinics!inner(clinic_id)
+      `)
         .eq('user_clinics.clinic_id', userClinic.clinic_id)
         .eq('role', 'manager')
         .order('created_at', { ascending: false })
@@ -102,7 +104,7 @@ export default function ManagersPage() {
       const managersWithStats = await Promise.all(
         (managersData || []).map(async (manager) => {
           try {
-            const [consultantsResult, leadsResult, commissionsResult] = await Promise.all([
+            const [consultantsResult, leadsResult, commissionsResult, managerEstablishments] = await Promise.all([
               // Contar consultores sob este gerente
               supabase
                 .from('hierarchies')
@@ -116,10 +118,22 @@ export default function ManagersPage() {
               supabase
                 .from('commissions')
                 .select('amount, status')
+                .eq('user_id', manager.id),
+
+              // CORREÇÃO: Query corrigida - establishment_codes é relacionamento 1:1
+              supabase
+                .from('user_establishments')
+                .select(`
+                establishment_code,
+                establishment_codes!user_establishments_establishment_code_fkey (
+                  name
+                )
+              `)
                 .eq('user_id', manager.id)
+                .eq('status', 'active')
+                .limit(1) // Pegar apenas o primeiro para display
             ])
 
-            // Verificar se os resultados são válidos
             const consultantsCount = consultantsResult?.count || 0
             const leadsCount = typeof leadsResult?.data === 'number' ? leadsResult.data : 0
             const commissionsData = commissionsResult?.data || []
@@ -128,14 +142,27 @@ export default function ManagersPage() {
               .filter(c => c?.status === 'paid')
               .reduce((sum, c) => sum + (c?.amount || 0), 0)
 
-            // Simular o campo gym_name baseado no nome do gerente (você pode adaptar isso)
-            const gymName = manager.full_name.includes('Flex') ? 'Flex Academia' : 
-                           manager.full_name.includes('Strong') ? 'Strong Fitness' :
-                           manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
+            let establishmentName: string = 'Estabelecimento não definido'
+            if (managerEstablishments.data && managerEstablishments.data.length > 0) {
+              const firstEstablishment = managerEstablishments.data[0]
+
+              // CORREÇÃO: Tipagem mais específica e verificação robusta
+              const establishmentData = firstEstablishment.establishment_codes
+
+              if (
+                establishmentData &&
+                typeof establishmentData === 'object' &&
+                establishmentData !== null &&
+                'name' in establishmentData &&
+                typeof establishmentData.name === 'string'
+              ) {
+                establishmentName = establishmentData.name || 'Estabelecimento não definido'
+              }
+            }
 
             return {
               ...manager,
-              gym_name: gymName,
+              establishment_name: establishmentName,
               _count: {
                 consultants: consultantsCount,
                 leads: leadsCount,
@@ -143,14 +170,14 @@ export default function ManagersPage() {
               },
               _stats: {
                 totalCommissions,
-                conversionRate: 0, // Placeholder por enquanto
+                conversionRate: 0,
               }
             }
           } catch (statsError) {
             console.error('Erro ao buscar estatísticas para gerente:', manager.id, statsError)
             return {
               ...manager,
-              gym_name: 'Academia não definida',
+              establishment_name: 'Estabelecimento não definido',
               _count: {
                 consultants: 0,
                 leads: 0,
@@ -167,11 +194,11 @@ export default function ManagersPage() {
 
       setManagers(managersWithStats)
 
-      // Extrair academias únicas para o filtro
-      const uniqueGyms = Array.from(
-        new Set(managersWithStats.map(m => m.gym_name).filter(Boolean))
+      // Extrair estabelecimentos únicos para o filtro
+      const uniqueEstablishments = Array.from(
+        new Set(managersWithStats.map(m => m.establishment_name).filter(Boolean))
       ).sort()
-      setGyms(uniqueGyms)
+      setEstablishments(uniqueEstablishments)
 
     } catch (error: any) {
       console.error('Erro ao buscar gerentes:', error)
@@ -180,7 +207,6 @@ export default function ManagersPage() {
       setLoading(false)
     }
   }
-
   const handleOpenModal = (mode: 'create' | 'edit', manager?: Manager) => {
     setModalMode(mode)
     if (mode === 'edit' && manager) {
@@ -189,12 +215,12 @@ export default function ManagersPage() {
         full_name: manager.full_name,
         email: manager.email,
         phone: manager.phone || '',
-        gym_name: manager.gym_name || '',
+        establishment_name: manager.establishment_name || '',
         password: '', // Não mostrar senha existente
       })
     } else {
       setSelectedManager(null)
-      setFormData({ full_name: '', email: '', phone: '', gym_name: '', password: '' })
+      setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
     }
     setIsModalOpen(true)
   }
@@ -222,7 +248,6 @@ export default function ManagersPage() {
           options: {
             data: {
               full_name: formData.full_name,
-              gym_name: formData.gym_name,
             }
           }
         })
@@ -245,8 +270,6 @@ export default function ManagersPage() {
               phone: formData.phone || null,
               role: 'manager',
               status: 'active',
-              // Você pode adicionar um campo gym_name na tabela users
-              // gym_name: formData.gym_name,
             }, {
               onConflict: 'id',
               ignoreDuplicates: false
@@ -271,6 +294,27 @@ export default function ManagersPage() {
             throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
           }
 
+          // 5. Se informou establishment_name, buscar e vincular ao estabelecimento
+          if (formData.establishment_name) {
+            const { data: establishments } = await supabase
+              .from('establishment_codes')
+              .select('code')
+              .ilike('name', `%${formData.establishment_name}%`)
+              .eq('is_active', true)
+              .limit(1)
+
+            if (establishments && establishments.length > 0) {
+              await supabase
+                .from('user_establishments')
+                .insert({
+                  user_id: signUpData.user.id,
+                  establishment_code: establishments[0].code,
+                  status: 'active',
+                  added_by: profile?.id
+                })
+            }
+          }
+
           toast.success('Gerente criado com sucesso! Ele receberá um email de confirmação.')
         } else {
           throw new Error('Usuário não foi criado corretamente')
@@ -283,7 +327,6 @@ export default function ManagersPage() {
         const updateData: any = {
           full_name: formData.full_name,
           phone: formData.phone || null,
-          // gym_name: formData.gym_name, // Se você adicionar este campo
           updated_at: new Date().toISOString()
         }
 
@@ -298,7 +341,7 @@ export default function ManagersPage() {
       }
 
       setIsModalOpen(false)
-      setFormData({ full_name: '', email: '', phone: '', gym_name: '', password: '' })
+      setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
 
       // Aguardar um pouco antes de recarregar
       setTimeout(() => {
@@ -374,12 +417,12 @@ export default function ManagersPage() {
     const matchesSearch = !searchTerm ||
       manager.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       manager.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      manager.gym_name?.toLowerCase().includes(searchTerm.toLowerCase())
+      manager.establishment_name?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchesStatus = !statusFilter || manager.status === statusFilter
-    const matchesGym = !gymFilter || manager.gym_name === gymFilter
+    const matchesEstablishment = !establishmentFilter || manager.establishment_name === establishmentFilter // CORRIGIDO
 
-    return matchesSearch && matchesStatus && matchesGym
+    return matchesSearch && matchesStatus && matchesEstablishment
   })
 
   const stats = {
@@ -388,7 +431,7 @@ export default function ManagersPage() {
     inactive: managers.filter(m => m.status === 'inactive').length,
     totalConsultants: managers.reduce((sum, m) => sum + (m._count?.consultants || 0), 0),
     totalCommissions: managers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0),
-    totalGyms: gyms.length,
+    totalEstablishments: establishments.length, // CORRIGIDO
   }
 
   const canEdit = profile?.role === 'clinic_admin'
@@ -420,9 +463,9 @@ export default function ManagersPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-secondary-900">Gerentes por Academia</h1>
+          <h1 className="text-2xl font-bold text-secondary-900">Gerentes por Estabelecimento</h1>
           <p className="text-secondary-600">
-            Gerencie todos os gerentes da clínica organizados por academia
+            Gerencie todos os gerentes da clínica organizados por estabelecimento
           </p>
         </div>
 
@@ -494,8 +537,8 @@ export default function ManagersPage() {
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Academias</p>
-                <p className="text-xs font-bold text-warning-600">{stats.totalGyms}</p>
+                <p className="text-xs font-medium text-secondary-500">Estabelecimentos</p>
+                <p className="text-xs font-bold text-warning-600">{stats.totalEstablishments}</p>
               </div>
             </div>
           </div>
@@ -582,7 +625,7 @@ export default function ManagersPage() {
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar por nome, email ou academia..."
+                placeholder="Buscar por nome, email ou estabelecimento..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -602,13 +645,13 @@ export default function ManagersPage() {
 
             <select
               className="input"
-              value={gymFilter}
-              onChange={(e) => setGymFilter(e.target.value)}
+              value={establishmentFilter}
+              onChange={(e) => setEstablishmentFilter(e.target.value)}
             >
-              <option value="">Todas as academias</option>
-              {gyms.map(gym => (
-                <option key={gym} value={gym}>
-                  {gym}
+              <option value="">Todos os estabelecimentos</option>
+              {establishments.map(establishment => (
+                <option key={establishment} value={establishment}>
+                  {establishment}
                 </option>
               ))}
             </select>
@@ -617,7 +660,7 @@ export default function ManagersPage() {
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
-                setGymFilter('')
+                setEstablishmentFilter('') // CORRIGIDO
               }}
               className="btn btn-secondary"
             >
@@ -641,7 +684,7 @@ export default function ManagersPage() {
               <thead>
                 <tr>
                   <th>Gerente</th>
-                  <th>Academia</th>
+                  <th>Estabelecimento</th>
                   <th>Contato</th>
                   <th>Equipe</th>
                   <th>Performance</th>
@@ -676,10 +719,10 @@ export default function ManagersPage() {
                         <BuildingOfficeIcon className="h-4 w-4 text-primary-500 mr-2" />
                         <div>
                           <div className="text-sm font-medium text-primary-900">
-                            {manager.gym_name || 'Não definida'}
+                            {manager.establishment_name || 'Não definida'}
                           </div>
                           <div className="text-xs text-secondary-500">
-                            Academia responsável
+                            Estabelecimento responsável
                           </div>
                         </div>
                       </div>
@@ -729,25 +772,23 @@ export default function ManagersPage() {
                         <select
                           value={manager.status}
                           onChange={(e) => handleStatusChange(manager.id, e.target.value)}
-                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${
-                            manager.status === 'active' ? 'badge-success' :
+                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${manager.status === 'active' ? 'badge-success' :
                             manager.status === 'inactive' ? 'badge-danger' :
-                            'badge-warning'
-                          }`}
+                              'badge-warning'
+                            }`}
                         >
                           <option value="active">Ativo</option>
                           <option value="inactive">Inativo</option>
                           <option value="pending">Pendente</option>
                         </select>
                       ) : (
-                        <span className={`badge ${
-                          manager.status === 'active' ? 'badge-success' :
+                        <span className={`badge ${manager.status === 'active' ? 'badge-success' :
                           manager.status === 'inactive' ? 'badge-danger' :
-                          'badge-warning'
-                        }`}>
+                            'badge-warning'
+                          }`}>
                           {manager.status === 'active' ? 'Ativo' :
-                           manager.status === 'inactive' ? 'Inativo' :
-                           'Pendente'}
+                            manager.status === 'inactive' ? 'Inativo' :
+                              'Pendente'}
                         </span>
                       )}
                     </td>
@@ -861,13 +902,13 @@ export default function ManagersPage() {
 
                     <div>
                       <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Academia
+                        Estabelecimento
                       </label>
                       <input
                         type="text"
                         className="input"
-                        value={formData.gym_name}
-                        onChange={(e) => setFormData(prev => ({ ...prev, gym_name: e.target.value }))}
+                        value={formData.establishment_name}
+                        onChange={(e) => setFormData(prev => ({ ...prev, establishment_name: e.target.value }))}
                         placeholder="Ex: Flex Academia, Strong Fitness"
                       />
                     </div>
@@ -881,7 +922,7 @@ export default function ManagersPage() {
                         className="input"
                         value={formData.email}
                         onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                        placeholder="email@academia.com"
+                        placeholder="email@estabelecimento.com"
                         disabled={modalMode === 'edit'}
                       />
                     </div>
@@ -931,7 +972,7 @@ export default function ManagersPage() {
                         submitting ||
                         !formData.full_name ||
                         !formData.email ||
-                        !formData.gym_name ||
+                        !formData.establishment_name ||
                         (modalMode === 'create' && !formData.password)
                       }
                     >

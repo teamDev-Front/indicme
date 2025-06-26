@@ -1,3 +1,4 @@
+// src/app/dashboard/consultants/page.tsx
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -5,23 +6,21 @@ import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import { motion } from 'framer-motion'
 import {
-  PlusIcon,
   MagnifyingGlassIcon,
   UserPlusIcon,
   EnvelopeIcon,
   PhoneIcon,
   BuildingOfficeIcon,
-  ChartBarIcon,
   EyeIcon,
   PencilIcon,
   TrashIcon,
   ExclamationTriangleIcon,
-  UserGroupIcon,
   FunnelIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
+import CreateConsultantModal from '@/components/consultants/CreateConsultantModal'
 
 interface Consultant {
   id: string
@@ -32,354 +31,181 @@ interface Consultant {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
-  gym_count?: number // Quantas academias este consultor possui
-  gym_names?: string[] // Nomes das academias
+  establishment_count?: number // Quantos estabelecimentos este consultor possui
+  establishment_names?: string[] // Nomes dos estabelecimentos
   _count?: {
     leads: number
-    commissions: number
+    arcadas_vendidas: number // Mudança: arcadas ao invés de comissões
   }
   manager?: {
     id: string
     full_name: string
-    gym_name?: string
+    establishment_name?: string
   }
-}
-
-interface Manager {
-  id: string
-  full_name: string
-  email: string
-  gym_name?: string
 }
 
 export default function ConsultantsPage() {
   const { profile } = useAuth()
   const [consultants, setConsultants] = useState<Consultant[]>([])
-  const [managers, setManagers] = useState<Manager[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [gymFilter, setGymFilter] = useState('')
-  const [gymCountFilter, setGymCountFilter] = useState('')
+  const [establishmentFilter, setEstablishmentFilter] = useState('')
+  const [establishmentCountFilter, setEstablishmentCountFilter] = useState('')
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null)
-  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
-  const [formData, setFormData] = useState({
-    full_name: '',
-    email: '',
-    phone: '',
-    manager_id: '',
-    password: '',
-  })
   const [submitting, setSubmitting] = useState(false)
-  const [gyms, setGyms] = useState<string[]>([])
+  const [establishments, setEstablishments] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
     if (profile && (profile.role === 'clinic_admin' || profile.role === 'clinic_viewer' || profile.role === 'manager')) {
       fetchConsultants()
-      if (profile.role !== 'manager') {
-        fetchManagers()
-      }
     }
   }, [profile])
 
-  const fetchConsultants = async () => {
-    try {
-      setLoading(true)
+ const fetchConsultants = async () => {
+  try {
+    setLoading(true)
 
-      // Buscar clínica do usuário
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
+    // Buscar clínica do usuário
+    const { data: userClinic } = await supabase
+      .from('user_clinics')
+      .select('clinic_id')
+      .eq('user_id', profile?.id)
+      .single()
 
-      if (!userClinic) return
+    if (!userClinic) return
 
-      let consultantsQuery = supabase
-        .from('users')
-        .select(`
-          *,
-          user_clinics!inner(clinic_id)
-        `)
-        .eq('user_clinics.clinic_id', userClinic.clinic_id)
-        .in('role', ['consultant', 'manager'])
-        .order('created_at', { ascending: false })
+    let consultantsQuery = supabase
+      .from('users')
+      .select(`
+        *,
+        user_clinics!inner(clinic_id)
+      `)
+      .eq('user_clinics.clinic_id', userClinic.clinic_id)
+      .in('role', ['consultant', 'manager'])
+      .order('created_at', { ascending: false })
 
-      // Se for manager, mostrar apenas consultores da sua equipe
-      if (profile?.role === 'manager') {
-        const { data: hierarchy } = await supabase
-          .from('hierarchies')
-          .select('consultant_id')
-          .eq('manager_id', profile.id)
+    // Se for manager, mostrar apenas consultores da sua equipe
+    if (profile?.role === 'manager') {
+      const { data: hierarchy } = await supabase
+        .from('hierarchies')
+        .select('consultant_id')
+        .eq('manager_id', profile.id)
 
-        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-        if (consultantIds.length > 0) {
-          consultantsQuery = consultantsQuery.in('id', consultantIds)
-        } else {
-          setConsultants([])
-          setLoading(false)
-          return
-        }
+      const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+      if (consultantIds.length > 0) {
+        consultantsQuery = consultantsQuery.in('id', consultantIds)
+      } else {
+        setConsultants([])
+        setLoading(false)
+        return
       }
+    }
 
-      const { data: consultantsData, error } = await consultantsQuery
+    const { data: consultantsData, error } = await consultantsQuery
 
-      if (error) throw error
+    if (error) throw error
 
-      const consultantsWithStats = await Promise.all(
-        (consultantsData || []).map(async (consultant) => {
-          const [leadsCount, commissionsCount, managerData] = await Promise.all([
-            supabase
-              .from('leads')
-              .select('id', { count: 'exact' })
-              .eq('indicated_by', consultant.id),
-            supabase
-              .from('commissions')
-              .select('id', { count: 'exact' })
-              .eq('user_id', consultant.id)
-              .eq('status', 'paid'),
-            supabase
-              .from('hierarchies')
-              .select(`
-                manager_id,
-                users!hierarchies_manager_id_fkey (
-                  id,
-                  full_name
-                )
-              `)
-              .eq('consultant_id', consultant.id)
-              .single()
-          ])
+    const consultantsWithStats = await Promise.all(
+      (consultantsData || []).map(async (consultant) => {
+        const [leadsCount, managerData, userEstablishments] = await Promise.all([
+          supabase
+            .from('leads')
+            .select('id', { count: 'exact' })
+            .eq('indicated_by', consultant.id),
+          supabase
+            .from('hierarchies')
+            .select(`
+              manager_id,
+              users!hierarchies_manager_id_fkey (
+                id,
+                full_name
+              )
+            `)
+            .eq('consultant_id', consultant.id)
+            .single(),
+          // CORREÇÃO: Query corrigida - establishment_codes é relacionamento 1:1
+          supabase
+            .from('user_establishments')
+            .select(`
+              establishment_code,
+              establishment_codes!user_establishments_establishment_code_fkey (
+                name
+              )
+            `)
+            .eq('user_id', consultant.id)
+            .eq('status', 'active')
+        ])
 
-          // Simular academias baseado no nome do consultor (você pode adaptar isso)
-          const gymNames = []
-          const gymCount = Math.floor(Math.random() * 3) + 1 // 1 a 3 academias por consultor
-          
-          if (consultant.full_name.includes('Flex') || Math.random() > 0.7) {
-            gymNames.push('Flex Academia')
+        // Calcular total de arcadas vendidas
+        const { data: leadsData } = await supabase
+          .from('leads')
+          .select('arcadas_vendidas')
+          .eq('indicated_by', consultant.id)
+          .eq('status', 'converted')
+
+        const totalArcadas = leadsData?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
+
+        // CORREÇÃO: Processar estabelecimentos corretamente
+        const establishmentNames = userEstablishments.data?.map(est => {
+          // CORREÇÃO: establishment_codes é um objeto único, não array
+          const establishmentData = est.establishment_codes
+          if (establishmentData && typeof establishmentData === 'object' && 'name' in establishmentData) {
+            return establishmentData.name || 'Estabelecimento'
           }
-          if (consultant.full_name.includes('Strong') || Math.random() > 0.8) {
-            gymNames.push('Strong Fitness')
-          }
-          if (consultant.full_name.includes('Power') || Math.random() > 0.9) {
-            gymNames.push('Power Gym')
-          }
-          
-          // Se não tem nenhuma academia, adicionar uma padrão
-          if (gymNames.length === 0) {
-            gymNames.push('Academia Central')
-          }
+          return 'Estabelecimento'
+        }) || []
 
-          // Se o consultor tem manager, usar a academia do manager
-          let managerGym = null
-          let managerInfo = null
-          
-          if (managerData.data?.users) {
-            const manager = Array.isArray(managerData.data.users) ? managerData.data.users[0] : managerData.data.users
-            if (manager && manager.full_name) {
-              // Simular academia do manager
-              managerGym = manager.full_name.includes('Flex') ? 'Flex Academia' : 
-                          manager.full_name.includes('Strong') ? 'Strong Fitness' :
-                          manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
-              
-              if (!gymNames.includes(managerGym)) {
-                gymNames.unshift(managerGym) // Adicionar no início
-              }
-              
-              managerInfo = {
-                id: manager.id,
-                full_name: manager.full_name,
-                gym_name: managerGym
-              }
+        // Se não tem estabelecimentos, adicionar placeholder
+        if (establishmentNames.length === 0) {
+          establishmentNames.push('Sem estabelecimento')
+        }
+
+        // Se o consultor tem manager, buscar info do manager
+        let managerInfo = null
+        if (managerData.data?.users) {
+          const manager = Array.isArray(managerData.data.users) ? managerData.data.users[0] : managerData.data.users
+          if (manager && manager.full_name) {
+            managerInfo = {
+              id: manager.id,
+              full_name: manager.full_name,
+              establishment_name: establishmentNames[0] // Usar primeiro estabelecimento
             }
           }
+        }
 
-          return {
-            ...consultant,
-            gym_count: gymNames.length,
-            gym_names: gymNames,
-            _count: {
-              leads: leadsCount.count || 0,
-              commissions: commissionsCount.count || 0,
-            },
-            manager: managerInfo
-          }
-        })
-      )
-
-      setConsultants(consultantsWithStats)
-
-      // Extrair academias únicas para o filtro
-      const allGyms = new Set<string>()
-      consultantsWithStats.forEach(consultant => {
-        consultant.gym_names?.forEach((gym: string) => allGyms.add(gym))
-      })
-      setGyms(Array.from(allGyms).sort())
-
-    } catch (error: any) {
-      console.error('Erro ao buscar consultores:', error)
-      toast.error('Erro ao carregar consultores')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchManagers = async () => {
-    try {
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) return
-
-      const { data, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id)
-        `)
-        .eq('user_clinics.clinic_id', userClinic.clinic_id)
-        .eq('role', 'manager')
-        .eq('status', 'active')
-
-      if (error) throw error
-
-      // Adicionar gym_name simulado para managers
-      const managersWithGym = (data || []).map(manager => ({
-        ...manager,
-        gym_name: manager.full_name.includes('Flex') ? 'Flex Academia' : 
-                 manager.full_name.includes('Strong') ? 'Strong Fitness' :
-                 manager.full_name.includes('Power') ? 'Power Gym' : 'Academia Central'
-      }))
-
-      setManagers(managersWithGym)
-    } catch (error: any) {
-      console.error('Erro ao buscar managers:', error)
-    }
-  }
-
-  const handleCreateConsultant = async () => {
-    try {
-      setSubmitting(true)
-
-      // Buscar clínica do usuário
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) throw new Error('Clínica não encontrada')
-
-      console.log('Criando consultor com dados:', formData)
-
-      // 1. Fazer signup normal
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          data: {
-            full_name: formData.full_name,
-          }
+        return {
+          ...consultant,
+          establishment_count: establishmentNames.length,
+          establishment_names: establishmentNames,
+          _count: {
+            leads: leadsCount.count || 0,
+            arcadas_vendidas: totalArcadas,
+          },
+          manager: managerInfo
         }
       })
+    )
 
-      console.log('Resultado do signUp consultor:', { signUpData, signUpError })
+    setConsultants(consultantsWithStats)
 
-      if (signUpError) {
-        throw new Error(`Erro no cadastro: ${signUpError.message}`)
-      }
+    // Extrair estabelecimentos únicos para o filtro
+    const allEstablishments = new Set<string>()
+    consultantsWithStats.forEach(consultant => {
+      consultant.establishment_names?.forEach((establishment: string) => allEstablishments.add(establishment))
+    })
+    setEstablishments(Array.from(allEstablishments).sort())
 
-      if (signUpData.user) {
-        console.log('Consultor criado no auth, ID:', signUpData.user.id)
-
-        // 2. Aguardar um pouco
-        await new Promise(resolve => setTimeout(resolve, 1000))
-
-        // 3. Criar perfil do consultor
-        const { error: profileError } = await supabase
-          .from('users')
-          .upsert({
-            id: signUpData.user.id,
-            email: formData.email,
-            full_name: formData.full_name,
-            phone: formData.phone || null,
-            role: 'consultant',
-            status: 'active',
-          }, {
-            onConflict: 'id',
-            ignoreDuplicates: false
-          })
-
-        console.log('Resultado do perfil consultor:', profileError)
-
-        if (profileError) {
-          throw new Error(`Erro ao criar perfil: ${profileError.message}`)
-        }
-
-        // 4. Associar à clínica
-        const { error: clinicError } = await supabase
-          .from('user_clinics')
-          .upsert({
-            user_id: signUpData.user.id,
-            clinic_id: userClinic.clinic_id,
-          }, {
-            onConflict: 'user_id,clinic_id',
-            ignoreDuplicates: true
-          })
-
-        console.log('Associação à clínica consultor:', clinicError)
-
-        if (clinicError) {
-          throw new Error(`Erro ao associar à clínica: ${clinicError.message}`)
-        }
-
-        // 5. Se tem manager, criar hierarquia
-        if (formData.manager_id) {
-          const { error: hierarchyError } = await supabase
-            .from('hierarchies')
-            .upsert({
-              manager_id: formData.manager_id,
-              consultant_id: signUpData.user.id,
-              clinic_id: userClinic.clinic_id,
-            }, {
-              onConflict: 'consultant_id,clinic_id',
-              ignoreDuplicates: false
-            })
-
-          console.log('Criação de hierarquia:', hierarchyError)
-
-          if (hierarchyError) {
-            console.warn('Erro na hierarquia (não crítico):', hierarchyError.message)
-          }
-        }
-
-        toast.success('Consultor criado com sucesso! Ele receberá um email de confirmação.')
-      } else {
-        throw new Error('Usuário não foi criado corretamente')
-      }
-
-      setIsModalOpen(false)
-      setFormData({ full_name: '', email: '', phone: '', manager_id: '', password: '' })
-
-      // Aguardar antes de recarregar
-      setTimeout(() => {
-        fetchConsultants()
-      }, 1500)
-
-    } catch (error: any) {
-      console.error('Erro completo ao criar consultor:', error)
-      toast.error(error.message || 'Erro ao criar consultor')
-    } finally {
-      setSubmitting(false)
-    }
+  } catch (error: any) {
+    console.error('Erro ao buscar consultores:', error)
+    toast.error('Erro ao carregar consultores')
+  } finally {
+    setLoading(false)
   }
+}
 
   const handleStatusChange = async (consultantId: string, newStatus: string) => {
     try {
@@ -429,18 +255,18 @@ export default function ConsultantsPage() {
     const matchesSearch = !searchTerm ||
       consultant.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       consultant.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      consultant.gym_names?.some(gym => gym.toLowerCase().includes(searchTerm.toLowerCase()))
+      consultant.establishment_names?.some(establishment => establishment.toLowerCase().includes(searchTerm.toLowerCase()))
 
     const matchesStatus = !statusFilter || consultant.status === statusFilter
 
-    const matchesGym = !gymFilter || consultant.gym_names?.includes(gymFilter)
+    const matchesEstablishment = !establishmentFilter || consultant.establishment_names?.includes(establishmentFilter)
 
-    const matchesGymCount = !gymCountFilter || 
-      (gymCountFilter === '1' && consultant.gym_count === 1) ||
-      (gymCountFilter === '2' && consultant.gym_count === 2) ||
-      (gymCountFilter === '3+' && (consultant.gym_count || 0) >= 3)
+    const matchesEstablishmentCount = !establishmentCountFilter || 
+      (establishmentCountFilter === '1' && consultant.establishment_count === 1) ||
+      (establishmentCountFilter === '2' && consultant.establishment_count === 2) ||
+      (establishmentCountFilter === '3+' && (consultant.establishment_count || 0) >= 3)
 
-    return matchesSearch && matchesStatus && matchesGym && matchesGymCount
+    return matchesSearch && matchesStatus && matchesEstablishment && matchesEstablishmentCount
   })
 
   const stats = {
@@ -448,11 +274,11 @@ export default function ConsultantsPage() {
     active: consultants.filter(c => c.status === 'active').length,
     inactive: consultants.filter(c => c.status === 'inactive').length,
     totalLeads: consultants.reduce((sum, c) => sum + (c._count?.leads || 0), 0),
-    flexConsultants: consultants.filter(c => c.gym_names?.includes('Flex Academia')).length,
-    multiGymConsultants: consultants.filter(c => (c.gym_count || 0) > 1).length,
+    totalArcadas: consultants.reduce((sum, c) => sum + (c._count?.arcadas_vendidas || 0), 0),
+    multiEstablishmentConsultants: consultants.filter(c => (c.establishment_count || 0) > 1).length,
   }
 
-  const canEdit = profile?.role === 'clinic_admin'
+  const canEdit = profile?.role === 'clinic_admin' || profile?.role === 'manager'
 
   if (loading) {
     return (
@@ -468,19 +294,19 @@ export default function ConsultantsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">
-            {profile?.role === 'manager' ? 'Minha Equipe' : 'Consultores por Academia'}
+            {profile?.role === 'manager' ? 'Minha Equipe' : 'Consultores por Estabelecimento'}
           </h1>
           <p className="text-secondary-600">
             {profile?.role === 'manager'
               ? 'Gerencie sua equipe de consultores'
-              : 'Gerencie todos os consultores organizados por academia'
+              : 'Gerencie todos os consultores organizados por estabelecimento'
             }
           </p>
         </div>
 
         {canEdit && (
           <button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setIsCreateModalOpen(true)}
             className="btn btn-primary"
           >
             <UserPlusIcon className="h-4 w-4 mr-2" />
@@ -547,7 +373,7 @@ export default function ConsultantsPage() {
               </div>
               <div className="ml-3">
                 <p className="text-xs font-medium text-secondary-500">Total</p>
-                <p className="text-xs text-secondary-400">Leads</p>
+                <p className="text-xs text-secondary-400">Indicações</p>
               </div>
             </div>
           </div>
@@ -562,13 +388,13 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-warning-600">{stats.flexConsultants}</span>
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.totalArcadas}</span>
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Flex</p>
-                <p className="text-xs text-secondary-400">Academia</p>
+                <p className="text-xs font-medium text-secondary-500">Arcadas</p>
+                <p className="text-xs text-secondary-400">Vendidas</p>
               </div>
             </div>
           </div>
@@ -583,13 +409,13 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-success-600">{stats.multiGymConsultants}</span>
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <BuildingOfficeIcon className="w-4 h-4 text-warning-600" />
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Múltiplas</p>
-                <p className="text-xs text-secondary-400">Academias</p>
+                <p className="text-xs font-medium text-secondary-500">Estabelecimentos</p>
+                <p className="text-xs font-bold text-warning-600">{establishments.length}</p>
               </div>
             </div>
           </div>
@@ -604,13 +430,13 @@ export default function ConsultantsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-danger-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-danger-600">{stats.inactive}</span>
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.multiEstablishmentConsultants}</span>
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Inativos</p>
-                <p className="text-xs text-secondary-400">Consultores</p>
+                <p className="text-xs font-medium text-secondary-500">Múltiplos</p>
+                <p className="text-xs text-secondary-400">Estabelecimentos</p>
               </div>
             </div>
           </div>
@@ -630,7 +456,7 @@ export default function ConsultantsPage() {
               <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
               <input
                 type="text"
-                placeholder="Buscar por nome, email ou academia..."
+                placeholder="Buscar por nome, email ou estabelecimento..."
                 className="input pl-10"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -650,34 +476,34 @@ export default function ConsultantsPage() {
 
             <select
               className="input"
-              value={gymFilter}
-              onChange={(e) => setGymFilter(e.target.value)}
+              value={establishmentFilter}
+              onChange={(e) => setEstablishmentFilter(e.target.value)}
             >
-              <option value="">Todas as academias</option>
-              {gyms.map(gym => (
-                <option key={gym} value={gym}>
-                  {gym}
+              <option value="">Todos os estabelecimentos</option>
+              {establishments.map(establishment => (
+                <option key={establishment} value={establishment}>
+                  {establishment}
                 </option>
               ))}
             </select>
 
             <select
               className="input"
-              value={gymCountFilter}
-              onChange={(e) => setGymCountFilter(e.target.value)}
+              value={establishmentCountFilter}
+              onChange={(e) => setEstablishmentCountFilter(e.target.value)}
             >
               <option value="">Qualquer quantidade</option>
-              <option value="1">1 academia</option>
-              <option value="2">2 academias</option>
-              <option value="3+">3+ academias</option>
+              <option value="1">1 estabelecimento</option>
+              <option value="2">2 estabelecimentos</option>
+              <option value="3+">3+ estabelecimentos</option>
             </select>
 
             <button
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
-                setGymFilter('')
-                setGymCountFilter('')
+                setEstablishmentFilter('')
+                setEstablishmentCountFilter('')
               }}
               className="btn btn-secondary"
             >
@@ -701,7 +527,7 @@ export default function ConsultantsPage() {
               <thead>
                 <tr>
                   <th>Consultor</th>
-                  <th>Academias</th>
+                  <th>Estabelecimentos</th>
                   <th>Contato</th>
                   <th>Gerente</th>
                   <th>Performance</th>
@@ -736,20 +562,20 @@ export default function ConsultantsPage() {
                         <div className="flex items-center">
                           <BuildingOfficeIcon className="h-4 w-4 text-primary-500 mr-2" />
                           <span className="text-sm font-medium text-primary-900">
-                            {consultant.gym_count} academia{consultant.gym_count !== 1 ? 's' : ''}
+                            {consultant.establishment_count} estabelecimento{consultant.establishment_count !== 1 ? 's' : ''}
                           </span>
                         </div>
                         <div className="text-xs text-secondary-600">
-                          {consultant.gym_names?.slice(0, 2).join(', ')}
-                          {(consultant.gym_names?.length || 0) > 2 && (
+                          {consultant.establishment_names?.slice(0, 2).join(', ')}
+                          {(consultant.establishment_names?.length || 0) > 2 && (
                             <span className="text-secondary-500">
-                              {' '}+{(consultant.gym_names?.length || 0) - 2} mais
+                              {' '}+{(consultant.establishment_names?.length || 0) - 2} mais
                             </span>
                           )}
                         </div>
-                        {consultant.gym_names?.includes('Flex Academia') && (
+                        {consultant.establishment_names?.some(name => name.includes('Focus')) && (
                           <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-success-100 text-success-800">
-                            Flex
+                            Focus
                           </div>
                         )}
                       </div>
@@ -780,9 +606,9 @@ export default function ConsultantsPage() {
                             <div className="text-sm font-medium text-secondary-900">
                               {consultant.manager.full_name}
                             </div>
-                            {consultant.manager.gym_name && (
+                            {consultant.manager.establishment_name && (
                               <div className="text-xs text-secondary-500">
-                                {consultant.manager.gym_name}
+                                {consultant.manager.establishment_name}
                               </div>
                             )}
                           </div>
@@ -797,13 +623,13 @@ export default function ConsultantsPage() {
                           <div className="text-sm font-medium text-secondary-900">
                             {consultant._count?.leads || 0}
                           </div>
-                          <div className="text-xs text-secondary-500">Leads</div>
+                          <div className="text-xs text-secondary-500">Indicações</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-sm font-medium text-secondary-900">
-                            {consultant._count?.commissions || 0}
+                          <div className="text-sm font-medium text-success-600">
+                            {consultant._count?.arcadas_vendidas || 0}
                           </div>
-                          <div className="text-xs text-secondary-500">Comissões</div>
+                          <div className="text-xs text-secondary-500">Arcadas</div>
                         </div>
                       </div>
                     </td>
@@ -881,7 +707,7 @@ export default function ConsultantsPage() {
                 </p>
                 {consultants.length === 0 && canEdit && (
                   <button
-                    onClick={() => setIsModalOpen(true)}
+                    onClick={() => setIsCreateModalOpen(true)}
                     className="btn btn-primary mt-4"
                   >
                     <UserPlusIcon className="h-4 w-4 mr-2" />
@@ -895,140 +721,11 @@ export default function ConsultantsPage() {
       </motion.div>
 
       {/* Create Consultant Modal */}
-      <Transition appear show={isModalOpen} as={Fragment}>
-        <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
-          <Transition.Child
-            as={Fragment}
-            enter="ease-out duration-300"
-            enterFrom="opacity-0"
-            enterTo="opacity-100"
-            leave="ease-in duration-200"
-            leaveFrom="opacity-100"
-            leaveTo="opacity-0"
-          >
-            <div className="fixed inset-0 bg-black bg-opacity-25" />
-          </Transition.Child>
-
-          <div className="fixed inset-0 overflow-y-auto">
-            <div className="flex min-h-full items-center justify-center p-4 text-center">
-              <Transition.Child
-                as={Fragment}
-                enter="ease-out duration-300"
-                enterFrom="opacity-0 scale-95"
-                enterTo="opacity-100 scale-100"
-                leave="ease-in duration-200"
-                leaveFrom="opacity-100 scale-100"
-                leaveTo="opacity-0 scale-95"
-              >
-                <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
-                  <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
-                    Novo Consultor
-                  </Dialog.Title>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Nome Completo
-                      </label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={formData.full_name}
-                        onChange={(e) => setFormData(prev => ({ ...prev, full_name: e.target.value }))}
-                        placeholder="Nome completo do consultor"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        className="input"
-                        value={formData.email}
-                        onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                        placeholder="email@exemplo.com"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Telefone
-                      </label>
-                      <input
-                        type="tel"
-                        className="input"
-                        value={formData.phone}
-                        onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                        placeholder="(11) 99999-9999"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Senha Temporária
-                      </label>
-                      <input
-                        type="password"
-                        className="input"
-                        value={formData.password}
-                        onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                        placeholder="Mínimo 6 caracteres"
-                      />
-                    </div>
-
-                    {managers.length > 0 && (
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Gerente/Academia (Opcional)
-                        </label>
-                        <select
-                          className="input"
-                          value={formData.manager_id}
-                          onChange={(e) => setFormData(prev => ({ ...prev, manager_id: e.target.value }))}
-                        >
-                          <option value="">Selecione um gerente</option>
-                          {managers.map(manager => (
-                            <option key={manager.id} value={manager.id}>
-                              {manager.full_name} - {manager.gym_name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-6 flex justify-end space-x-3">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setIsModalOpen(false)}
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={handleCreateConsultant}
-                      disabled={submitting || !formData.full_name || !formData.email || !formData.password}
-                    >
-                      {submitting ? (
-                        <>
-                          <div className="loading-spinner w-4 h-4 mr-2"></div>
-                          Criando...
-                        </>
-                      ) : (
-                        'Criar Consultor'
-                      )}
-                    </button>
-                  </div>
-                </Dialog.Panel>
-              </Transition.Child>
-            </div>
-          </div>
-        </Dialog>
-      </Transition>
+      <CreateConsultantModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={fetchConsultants}
+      />
 
       {/* Delete Confirmation Modal */}
       <Transition appear show={isDeleteModalOpen} as={Fragment}>

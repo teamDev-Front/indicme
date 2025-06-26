@@ -1,3 +1,4 @@
+// src/app/dashboard/settings/page.tsx
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -22,9 +23,9 @@ import toast from 'react-hot-toast'
 interface CommissionSettings {
   id?: string
   clinic_id: string
-  consultant_percentage: number
-  manager_percentage: number
-  base_commission_value: number
+  valor_por_arcada: number // Mudança: valor fixo por arcada
+  bonus_a_cada_arcadas: number // A cada quantas arcadas ganha bônus
+  valor_bonus: number // Valor do bônus
   created_at?: string
   updated_at?: string
 }
@@ -46,9 +47,9 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('commissions')
   const [commissionSettings, setCommissionSettings] = useState<CommissionSettings>({
     clinic_id: '',
-    consultant_percentage: 10.00,
-    manager_percentage: 5.00,
-    base_commission_value: 100.00,
+    valor_por_arcada: 750.00,
+    bonus_a_cada_arcadas: 7,
+    valor_bonus: 750.00,
   })
   const [clinicSettings, setClinicSettings] = useState<ClinicSettings>({
     name: '',
@@ -63,7 +64,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
-  const [previewValue, setPreviewValue] = useState(1000)
+  const [previewArcadas, setPreviewArcadas] = useState(10)
   const supabase = createClient()
 
   useEffect(() => {
@@ -74,7 +75,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     setHasChanges(true)
-  }, [commissionSettings.consultant_percentage, commissionSettings.manager_percentage, commissionSettings.base_commission_value])
+  }, [commissionSettings.valor_por_arcada, commissionSettings.bonus_a_cada_arcadas, commissionSettings.valor_bonus])
 
   const fetchSettings = async () => {
     try {
@@ -133,9 +134,9 @@ export default function SettingsPage() {
         const { error } = await supabase
           .from('commission_settings')
           .update({
-            consultant_percentage: commissionSettings.consultant_percentage,
-            manager_percentage: commissionSettings.manager_percentage,
-            base_commission_value: commissionSettings.base_commission_value,
+            valor_por_arcada: commissionSettings.valor_por_arcada,
+            bonus_a_cada_arcadas: commissionSettings.bonus_a_cada_arcadas,
+            valor_bonus: commissionSettings.valor_bonus,
             updated_at: new Date().toISOString()
           })
           .eq('id', commissionSettings.id)
@@ -146,9 +147,9 @@ export default function SettingsPage() {
           .from('commission_settings')
           .insert({
             clinic_id: commissionSettings.clinic_id,
-            consultant_percentage: commissionSettings.consultant_percentage,
-            manager_percentage: commissionSettings.manager_percentage,
-            base_commission_value: commissionSettings.base_commission_value,
+            valor_por_arcada: commissionSettings.valor_por_arcada,
+            bonus_a_cada_arcadas: commissionSettings.bonus_a_cada_arcadas,
+            valor_bonus: commissionSettings.valor_bonus,
           })
           .select()
           .single()
@@ -206,14 +207,31 @@ export default function SettingsPage() {
   }
 
   const calculatePreview = () => {
-    const consultantCommission = (previewValue * commissionSettings.consultant_percentage) / 100
-    const managerCommission = (previewValue * commissionSettings.manager_percentage) / 100
-    
+    const arcadasVendidas = previewArcadas
+    const valorPorArcada = commissionSettings.valor_por_arcada
+    const bonusACada = commissionSettings.bonus_a_cada_arcadas
+    const valorBonus = commissionSettings.valor_bonus
+
+    // Calcular valor base (arcadas × valor)
+    const valorBase = arcadasVendidas * valorPorArcada
+
+    // Calcular quantos bônus ganhou
+    const quantidadeBonus = Math.floor(arcadasVendidas / bonusACada)
+    const valorTotalBonus = quantidadeBonus * valorBonus
+
+    // Próximo bônus
+    const arcadasParaProximoBonus = bonusACada - (arcadasVendidas % bonusACada)
+    const proximoBonus = arcadasParaProximoBonus === bonusACada ? 0 : arcadasParaProximoBonus
+
     return {
-      leadValue: previewValue,
-      consultantCommission,
-      managerCommission,
-      totalCommission: consultantCommission + managerCommission
+      arcadasVendidas,
+      valorPorArcada,
+      valorBase,
+      quantidadeBonus,
+      valorTotalBonus,
+      valorTotal: valorBase + valorTotalBonus,
+      proximoBonus,
+      proximoBonusEm: proximoBonus > 0 ? arcadasVendidas + proximoBonus : (arcadasVendidas + bonusACada)
     }
   }
 
@@ -291,9 +309,10 @@ export default function SettingsPage() {
             <div className="flex">
               <InformationCircleIcon className="h-5 w-5 text-warning-400 mr-3 mt-0.5" />
               <div>
-                <h3 className="text-sm font-medium text-warning-800">Importante</h3>
+                <h3 className="text-sm font-medium text-warning-800">Sistema de Comissões por Arcadas</h3>
                 <p className="text-sm text-warning-700 mt-1">
-                  As alterações nas configurações de comissões afetarão apenas os novos leads criados após a modificação.
+                  O sistema calcula comissões fixas por arcada vendida, com bônus progressivos. 
+                  As alterações afetarão apenas os novos leads convertidos.
                 </p>
               </div>
             </div>
@@ -316,53 +335,7 @@ export default function SettingsPage() {
               <div className="card-body space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Percentual do Consultor
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      className="input pr-8"
-                      value={commissionSettings.consultant_percentage}
-                      onChange={(e) => setCommissionSettings(prev => ({ 
-                        ...prev, 
-                        consultant_percentage: parseFloat(e.target.value) || 0 
-                      }))}
-                    />
-                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                      <span className="text-secondary-500 text-sm">%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Percentual do Manager
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      className="input pr-8"
-                      value={commissionSettings.manager_percentage}
-                      onChange={(e) => setCommissionSettings(prev => ({ 
-                        ...prev, 
-                        manager_percentage: parseFloat(e.target.value) || 0 
-                      }))}
-                    />
-                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                      <span className="text-secondary-500 text-sm">%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Valor Base da Comissão
+                    Valor por Arcada
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -373,13 +346,70 @@ export default function SettingsPage() {
                       step="0.01"
                       min="0"
                       className="input pl-10"
-                      value={commissionSettings.base_commission_value}
+                      value={commissionSettings.valor_por_arcada}
                       onChange={(e) => setCommissionSettings(prev => ({ 
                         ...prev, 
-                        base_commission_value: parseFloat(e.target.value) || 0 
+                        valor_por_arcada: parseFloat(e.target.value) || 0 
                       }))}
                     />
                   </div>
+                  <p className="text-xs text-secondary-500 mt-1">
+                    Valor fixo pago por cada arcada vendida
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Bônus a Cada X Arcadas
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    className="input"
+                    value={commissionSettings.bonus_a_cada_arcadas}
+                    onChange={(e) => setCommissionSettings(prev => ({ 
+                      ...prev, 
+                      bonus_a_cada_arcadas: parseInt(e.target.value) || 1 
+                    }))}
+                  />
+                  <p className="text-xs text-secondary-500 mt-1">
+                    A cada quantas arcadas o consultor ganha bônus
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Valor do Bônus
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <span className="text-secondary-500 text-sm">R$</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className="input pl-10"
+                      value={commissionSettings.valor_bonus}
+                      onChange={(e) => setCommissionSettings(prev => ({ 
+                        ...prev, 
+                        valor_bonus: parseFloat(e.target.value) || 0 
+                      }))}
+                    />
+                  </div>
+                  <p className="text-xs text-secondary-500 mt-1">
+                    Valor adicional ganho a cada marco de arcadas
+                  </p>
+                </div>
+
+                <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-primary-900 mb-2">Como Funciona</h4>
+                  <ul className="text-sm text-primary-700 space-y-1">
+                    <li>• Cada arcada vendida = R$ {commissionSettings.valor_por_arcada.toFixed(2)}</li>
+                    <li>• A cada {commissionSettings.bonus_a_cada_arcadas} arcadas = +R$ {commissionSettings.valor_bonus.toFixed(2)} de bônus</li>
+                    <li>• Exemplo: 7 arcadas = R$ {(7 * commissionSettings.valor_por_arcada + commissionSettings.valor_bonus).toFixed(2)} total</li>
+                    <li>• Exemplo: 14 arcadas = R$ {(14 * commissionSettings.valor_por_arcada + 2 * commissionSettings.valor_bonus).toFixed(2)} total</li>
+                  </ul>
                 </div>
 
                 <button
@@ -412,48 +442,93 @@ export default function SettingsPage() {
               <div className="card-header">
                 <h3 className="text-lg font-medium text-secondary-900 flex items-center">
                   <CalculatorIcon className="h-5 w-5 mr-2" />
-                  Simulador de Comissões
+                  Simulador de Ganhos
                 </h3>
               </div>
               <div className="card-body space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Valor do Serviço para Simulação
+                    Quantidade de Arcadas para Simulação
                   </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <span className="text-secondary-500 text-sm">R$</span>
-                    </div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      className="input pl-10"
-                      value={previewValue}
-                      onChange={(e) => setPreviewValue(parseFloat(e.target.value) || 0)}
-                    />
-                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    className="input"
+                    value={previewArcadas}
+                    onChange={(e) => setPreviewArcadas(parseInt(e.target.value) || 0)}
+                  />
                 </div>
 
                 <div className="space-y-4">
+                  <div className="bg-secondary-50 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-secondary-900 mb-2">Detalhamento</h4>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-secondary-600">Arcadas vendidas:</span>
+                        <span className="font-medium">{preview.arcadasVendidas}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-secondary-600">Valor por arcada:</span>
+                        <span className="font-medium">R$ {preview.valorPorArcada.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-secondary-600">Valor base:</span>
+                        <span className="font-medium">R$ {preview.valorBase.toFixed(2)}</span>
+                      </div>
+                      <hr className="border-secondary-200" />
+                      <div className="flex justify-between">
+                        <span className="text-secondary-600">Bônus conquistados:</span>
+                        <span className="font-medium">{preview.quantidadeBonus}x</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-secondary-600">Valor dos bônus:</span>
+                        <span className="font-medium text-success-600">R$ {preview.valorTotalBonus.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-success-50 rounded-lg p-4 border-2 border-success-300">
+                    <h4 className="text-sm font-medium text-success-900 mb-2">Total a Receber</h4>
+                    <div className="text-3xl font-bold text-success-600">
+                      R$ {preview.valorTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                  </div>
+
+                  {preview.proximoBonus > 0 && (
+                    <div className="bg-warning-50 rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-warning-900 mb-2">Próximo Bônus</h4>
+                      <p className="text-sm text-warning-700">
+                        Faltam <strong>{preview.proximoBonus} arcadas</strong> para ganhar mais R$ {commissionSettings.valor_bonus.toFixed(2)} de bônus!
+                      </p>
+                      <p className="text-xs text-warning-600 mt-1">
+                        Próximo bônus em {preview.proximoBonusEm} arcadas totais
+                      </p>
+                    </div>
+                  )}
+
                   <div className="bg-primary-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-primary-900 mb-2">Comissão do Consultor</h4>
-                    <div className="text-2xl font-bold text-primary-600">
-                      R$ {preview.consultantCommission.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-
-                  <div className="bg-success-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-success-900 mb-2">Comissão do Gerente</h4>
-                    <div className="text-2xl font-bold text-success-600">
-                      R$ {preview.managerCommission.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-
-                  <div className="bg-secondary-100 rounded-lg p-4 border-2 border-secondary-300">
-                    <h4 className="text-sm font-medium text-secondary-900 mb-2">Total de Comissões</h4>
-                    <div className="text-2xl font-bold text-secondary-900">
-                      R$ {preview.totalCommission.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    <h4 className="text-sm font-medium text-primary-900 mb-2">Marcos de Bônus</h4>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {[1, 2, 3, 4, 5, 6].map(multiplicador => {
+                        const arcadas = multiplicador * commissionSettings.bonus_a_cada_arcadas
+                        const valor = (arcadas * commissionSettings.valor_por_arcada) + (multiplicador * commissionSettings.valor_bonus)
+                        const atingido = preview.arcadasVendidas >= arcadas
+                        
+                        return (
+                          <div 
+                            key={multiplicador}
+                            className={`p-2 rounded text-center ${
+                              atingido 
+                                ? 'bg-success-100 text-success-800 border border-success-300' 
+                                : 'bg-white text-secondary-600 border border-secondary-200'
+                            }`}
+                          >
+                            <div className="font-medium">{arcadas}</div>
+                            <div>R$ {valor.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</div>
+                            {atingido && <div className="text-xs">✓</div>}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
