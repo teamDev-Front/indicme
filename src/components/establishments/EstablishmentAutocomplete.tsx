@@ -166,7 +166,7 @@ export default function EstablishmentAutocomplete({
                       Criar novo estabelecimento
                     </span>
                     <span className={clsx('block text-xs', active ? 'text-success-200' : 'text-success-500')}>
-                      "{query}"
+                      &quot;{query}&quot;
                     </span>
                   </div>
                 </div>
