@@ -215,31 +215,10 @@ export default function ManagersPage() {
   }
 
   const handleCreateNewEstablishment = async (name: string) => {
-    try {
-      // Gerar código único de 6 caracteres
-      const baseCode = name.toUpperCase()
-        .replace(/[^A-Z0-9]/g, '') // Remove caracteres especiais
-        .substring(0, 3) // Pega só 3 caracteres
-      
-      const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase() // 3 caracteres aleatórios
-      const code = baseCode + randomSuffix
-      
-      const { error } = await supabase
-        .from('establishment_codes')
-        .insert({
-          code,
-          name,
-          is_active: true
-        })
-
-      if (error) throw error
-
-      setFormData(prev => ({ ...prev, establishment_name: name }))
-      toast.success('Novo estabelecimento criado!')
-    } catch (error) {
-      console.error('Erro ao criar estabelecimento:', error)
-      toast.error('Erro ao criar estabelecimento')
-    }
+    // O EstablishmentAutocomplete já cria o estabelecimento internamente
+    // Aqui só precisamos atualizar o estado local
+    setFormData(prev => ({ ...prev, establishment_name: name }))
+    toast.success('Novo estabelecimento criado!')
   }
 
   const handleOpenModal = async (mode: 'create' | 'edit', manager?: Manager) => {
