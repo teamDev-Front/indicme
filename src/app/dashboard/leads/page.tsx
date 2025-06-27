@@ -543,7 +543,7 @@ export default function LeadsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-18 bg-success-100 rounded-lg flex items-center justify-center">
                   <span className="text-sm font-bold text-success-600">{stats.conversionRate}%</span>
                 </div>
               </div>
