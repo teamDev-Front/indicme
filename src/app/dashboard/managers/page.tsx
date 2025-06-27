@@ -220,10 +220,10 @@ export default function ManagersPage() {
       const baseCode = name.toUpperCase()
         .replace(/[^A-Z0-9]/g, '') // Remove caracteres especiais
         .substring(0, 3) // Pega só 3 caracteres
-
+      
       const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase() // 3 caracteres aleatórios
       const code = baseCode + randomSuffix
-
+      
       const { error } = await supabase
         .from('establishment_codes')
         .insert({
@@ -839,8 +839,8 @@ export default function ManagersPage() {
                           value={manager.status}
                           onChange={(e) => handleStatusChange(manager.id, e.target.value)}
                           className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${manager.status === 'active' ? 'badge-success' :
-                            manager.status === 'inactive' ? 'badge-danger' :
-                              'badge-warning'
+                              manager.status === 'inactive' ? 'badge-danger' :
+                                'badge-warning'
                             }`}
                         >
                           <option value="active">Ativo</option>
@@ -849,8 +849,8 @@ export default function ManagersPage() {
                         </select>
                       ) : (
                         <span className={`badge ${manager.status === 'active' ? 'badge-success' :
-                          manager.status === 'inactive' ? 'badge-danger' :
-                            'badge-warning'
+                            manager.status === 'inactive' ? 'badge-danger' :
+                              'badge-warning'
                           }`}>
                           {manager.status === 'active' ? 'Ativo' :
                             manager.status === 'inactive' ? 'Inativo' :
