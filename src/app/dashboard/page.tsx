@@ -566,7 +566,7 @@ export default function ImprovedDashboardPage() {
   const getRoleSpecificInsights = () => {
     if (profile?.role === 'consultant') {
       return (
-        <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
+        <div>
           {/* <div className="flex items-start">
             <InformationCircleIcon className="h-5 w-5 text-primary-500 mr-3 mt-0.5" />
             <div>
@@ -698,7 +698,7 @@ export default function ImprovedDashboardPage() {
             transition={{ duration: 0.5, delay: index * 0.1 }}
             className="card"
           >
-            <div className="card-body">
+            <div className="card-body p-2">
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <div className={`w-8 h-8 bg-${item.color}-100 rounded-lg flex items-center justify-center`}>
