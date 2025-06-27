@@ -151,6 +151,17 @@ export default function LeadsPage() {
 
   const updateLeadStatus = async (leadId: string, newStatus: string) => {
     try {
+      // Se está marcando como convertido, abrir modal de arcadas
+      if (newStatus === 'converted') {
+        const lead = leads.find(l => l.id === leadId)
+        if (lead) {
+          setSelectedLeadForConversion(lead)
+          setShowArcadasModal(true)
+          return // Não atualizar ainda, esperar o modal
+        }
+      }
+
+      // Para outros status, fazer a mudança normal
       setUpdatingStatus(leadId)
 
       const { error } = await supabase
@@ -172,6 +183,88 @@ export default function LeadsPage() {
     } catch (error: any) {
       console.error('Erro ao atualizar status:', error)
       toast.error('Erro ao atualizar status')
+    } finally {
+      setUpdatingStatus(null)
+    }
+  }
+
+  // E corrigir o handleConfirmConversion para usar a lógica correta:
+  const handleConfirmConversion = async (arcadas: number) => {
+    if (!selectedLeadForConversion) return
+
+    try {
+      setUpdatingStatus(selectedLeadForConversion.id)
+
+      // Atualizar o lead
+      const updateData = {
+        status: 'converted' as const,
+        arcadas_vendidas: arcadas,
+        converted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('leads')
+        .update(updateData)
+        .eq('id', selectedLeadForConversion.id)
+
+      if (error) throw error
+
+      // Calcular comissão baseada nas arcadas
+      const valorPorArcada = 750
+      const comissaoConsultor = arcadas * valorPorArcada
+
+      // Criar comissão do consultor
+      await supabase
+        .from('commissions')
+        .insert({
+          lead_id: selectedLeadForConversion.id,
+          user_id: selectedLeadForConversion.indicated_by,
+          amount: comissaoConsultor,
+          clinic_id: selectedLeadForConversion.clinic_id,
+          percentage: 100,
+          type: 'consultant',
+          status: 'pending',
+        })
+
+      // Se houver gerente, criar comissão do gerente (10% do valor total)
+      const { data: hierarchy } = await supabase
+        .from('hierarchies')
+        .select('manager_id')
+        .eq('consultant_id', selectedLeadForConversion.indicated_by)
+        .single()
+
+      if (hierarchy?.manager_id) {
+        const comissaoGerente = comissaoConsultor * 0.10
+        await supabase
+          .from('commissions')
+          .insert({
+            lead_id: selectedLeadForConversion.id,
+            user_id: hierarchy.manager_id,
+            amount: comissaoGerente,
+            clinic_id: selectedLeadForConversion.clinic_id,
+            percentage: 10,
+            type: 'manager',
+            status: 'pending',
+          })
+      }
+
+      toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
+
+      // Atualizar a lista local
+      setLeads(prev => prev.map(lead =>
+        lead.id === selectedLeadForConversion.id
+          ? { ...lead, ...updateData } as Lead
+          : lead
+      ))
+
+      // Fechar modal
+      setShowArcadasModal(false)
+      setSelectedLeadForConversion(null)
+
+    } catch (error: any) {
+      console.error('Erro ao converter lead:', error)
+      toast.error('Erro ao converter lead')
     } finally {
       setUpdatingStatus(null)
     }
@@ -254,29 +347,33 @@ export default function LeadsPage() {
             .from('commissions')
             .insert({
               lead_id: leadId,
-              user_id: lead.consultant_id,
+              user_id: lead.indicated_by, // CORREÇÃO: usar indicated_by em vez de consultant_id
               amount: comissaoConsultor,
-              valor_por_arcada: valorPorArcada,
-              arcadas_vendidas: arcadas,
+              clinic_id: lead.clinic_id,
+              percentage: 100, // 100% do valor por arcada
               type: 'consultant',
               status: 'pending',
-              percentage: 100, // 100% do valor por arcada
             })
 
           // Se houver gerente, criar comissão do gerente (10% do valor total)
-          if (lead.manager_id) {
+          const { data: hierarchy } = await supabase
+            .from('hierarchies')
+            .select('manager_id')
+            .eq('consultant_id', lead.indicated_by)
+            .single()
+
+          if (hierarchy?.manager_id) {
             const comissaoGerente = comissaoConsultor * 0.10
             await supabase
               .from('commissions')
               .insert({
                 lead_id: leadId,
-                user_id: lead.manager_id,
+                user_id: hierarchy.manager_id,
                 amount: comissaoGerente,
-                valor_por_arcada: valorPorArcada,
-                arcadas_vendidas: arcadas,
+                clinic_id: lead.clinic_id,
+                percentage: 10,
                 type: 'manager',
                 status: 'pending',
-                percentage: 10,
               })
           }
         }
@@ -290,13 +387,6 @@ export default function LeadsPage() {
     }
   }
 
-  // Função para confirmar conversão com arcadas
-  const handleConfirmConversion = (arcadas: number) => {
-    if (selectedLeadForConversion) {
-      handleUpdateStatus(selectedLeadForConversion.id, 'converted', arcadas)
-      setSelectedLeadForConversion(null)
-    }
-  }
 
   const getStatusColor = (status: string) => {
     const option = statusOptions.find(opt => opt.value === status)

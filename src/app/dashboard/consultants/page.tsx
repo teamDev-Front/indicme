@@ -111,7 +111,7 @@ export default function ConsultantsPage() {
 
       const consultantsWithStats = await Promise.all(
         (consultantsData || []).map(async (consultant) => {
-          const [leadsCount, managerData, userEstablishments] = await Promise.all([
+          const [leadsCount, managerData] = await Promise.all([
             supabase
               .from('leads')
               .select('id', { count: 'exact' })
@@ -127,13 +127,14 @@ export default function ConsultantsPage() {
             `)
               .eq('consultant_id', consultant.id)
               .single(),
-            // CORREÇÃO: Query simplificada para estabelecimentos
+            // CORREÇÃO: Query melhorada para buscar nomes dos estabelecimentos
             supabase
               .from('user_establishments')
               .select(`
               establishment_code,
-              establishment_codes (
-                name
+              establishment_codes!inner (
+                name,
+                description
               )
             `)
               .eq('user_id', consultant.id)
@@ -149,18 +150,36 @@ export default function ConsultantsPage() {
 
           const totalArcadas = leadsData?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
 
-          // CORREÇÃO: Processar estabelecimentos de forma mais robusta
-          const establishmentNames = []
+          const userEstablishments = await supabase
+            .from('user_establishments')
+            .select(`
+    establishment_code,
+    establishment_code (
+      name,
+      description
+    )
+  `)
+            .eq('user_id', consultant.id)
+            .eq('status', 'active')
+
+          // CORREÇÃO: Processar estabelecimentos corretamente
+          const establishmentNames: string[] = []
 
           if (userEstablishments.data && userEstablishments.data.length > 0) {
             for (const est of userEstablishments.data) {
-              if (est.establishment_codes && est.establishment_codes.length > 0) {
-                establishmentNames.push(est.establishment_codes[0].name)
-              } else if (est?.establishment_code) {
+              // CORREÇÃO: establishment_codes é um objeto, não array
+              if (est.establishment_code && est.establishment_code.name) {
+                establishmentNames.push(est.establishment_code.name)
+              } else {
                 // Fallback: usar o código se não tiver nome
                 establishmentNames.push(`Estabelecimento ${est.establishment_code}`)
               }
             }
+          }
+
+          // Se não tem estabelecimentos, adicionar placeholder
+          if (establishmentNames.length === 0) {
+            establishmentNames.push('Sem estabelecimento')
           }
 
           // Se não tem estabelecimentos, adicionar placeholder
