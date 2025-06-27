@@ -366,7 +366,7 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                     )}
 
                     {/* Comissões */}
-                    {lead.commissions && lead.commissions.length > 0 && (
+                    {/* {lead.commissions && lead.commissions.length > 0 && (
                       <div>
                         <h4 className="text-lg font-medium text-secondary-900 mb-4">Comissões</h4>
                         <div className="space-y-3">
@@ -398,7 +398,7 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                           ))}
                         </div>
                       </div>
-                    )}
+                    )} */}
 
                     {/* Notes Section */}
                     <div>
