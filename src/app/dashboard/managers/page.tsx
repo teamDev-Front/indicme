@@ -1,4 +1,4 @@
-// src/app/dashboard/managers/page.tsx - VERSÃO LIMPA E FUNCIONAL
+// src/app/dashboard/managers/page.tsx - COM AUTOCOMPLETE
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -24,6 +24,7 @@ import {
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
+import EstablishmentAutocomplete from '@/components/establishments/EstablishmentAutocomplete'
 
 interface Manager {
   id: string
@@ -104,27 +105,24 @@ export default function ManagersPage() {
       const managersWithStats = await Promise.all(
         (managersData || []).map(async (manager) => {
           try {
-            // Buscar estabelecimento do manager - SIMPLES
+            // Buscar estabelecimento do manager - CORRIGIDO
             let establishmentName = 'Estabelecimento não definido'
 
             const { data: userEst } = await supabase
               .from('user_establishments')
-              .select('establishment_code')
+              .select(`
+                establishment_code,
+                establishment_code (
+                  name
+                )
+              `)
               .eq('user_id', manager.id)
               .eq('status', 'active')
               .limit(1)
               .single()
 
-            if (userEst?.establishment_code) {
-              const { data: estData } = await supabase
-                .from('establishment_codes')
-                .select('name')
-                .eq('code', userEst.establishment_code)
-                .single()
-
-              if (estData?.name) {
-                establishmentName = estData.name
-              }
+            if (userEst?.establishment_code?.name) {
+              establishmentName = userEst.establishment_code.name
             }
 
             // Contar consultores
@@ -195,7 +193,7 @@ export default function ManagersPage() {
 
       setManagers(managersWithStats)
 
-      // Extrair estabelecimentos únicos - CORRIGIDO
+      // Extrair estabelecimentos únicos
       const uniqueEstablishments = managersWithStats
         .map(m => m.establishment_name)
         .filter((name): name is string =>
@@ -216,6 +214,29 @@ export default function ManagersPage() {
     }
   }
 
+  const handleCreateNewEstablishment = async (name: string) => {
+    try {
+      // Gerar código único
+      const code = name.toUpperCase().replace(/\s+/g, '').substring(0, 8) + Math.random().toString(36).substring(2, 6).toUpperCase()
+      
+      const { error } = await supabase
+        .from('establishment_codes')
+        .insert({
+          code,
+          name,
+          is_active: true
+        })
+
+      if (error) throw error
+
+      setFormData(prev => ({ ...prev, establishment_name: name }))
+      toast.success('Novo estabelecimento criado!')
+    } catch (error) {
+      console.error('Erro ao criar estabelecimento:', error)
+      toast.error('Erro ao criar estabelecimento')
+    }
+  }
+
   const handleOpenModal = async (mode: 'create' | 'edit', manager?: Manager) => {
     setModalMode(mode)
     if (mode === 'edit' && manager) {
@@ -228,7 +249,7 @@ export default function ManagersPage() {
           .from('user_establishments')
           .select(`
             establishment_code,
-            establishment_codes (
+            establishment_code (
               name
             )
           `)
@@ -237,14 +258,8 @@ export default function ManagersPage() {
           .limit(1)
           .single()
 
-        if (userEst?.establishment_codes) {
-          // Verificar se é array ou objeto
-          const estCodes = userEst.establishment_codes as any
-          if (Array.isArray(estCodes) && estCodes.length > 0) {
-            currentEstablishmentName = estCodes[0].name || ''
-          } else if (estCodes && typeof estCodes === 'object' && 'name' in estCodes) {
-            currentEstablishmentName = estCodes.name || ''
-          }
+        if (userEst?.establishment_code?.name) {
+          currentEstablishmentName = userEst.establishment_code.name
         }
       } catch (error) {
         console.error('Erro ao buscar estabelecimento:', error)
@@ -323,10 +338,11 @@ export default function ManagersPage() {
 
           // Vincular estabelecimento se informado
           if (formData.establishment_name) {
+            // Buscar código do estabelecimento
             const { data: establishments } = await supabase
               .from('establishment_codes')
               .select('code')
-              .ilike('name', `%${formData.establishment_name}%`)
+              .eq('name', formData.establishment_name)
               .eq('is_active', true)
               .limit(1)
 
@@ -359,6 +375,35 @@ export default function ManagersPage() {
           .eq('id', selectedManager.id)
 
         if (error) throw error
+
+        // Atualizar estabelecimento se mudou
+        if (formData.establishment_name && formData.establishment_name !== selectedManager.establishment_name) {
+          // Primeiro, desativar estabelecimentos atuais
+          await supabase
+            .from('user_establishments')
+            .update({ status: 'inactive' })
+            .eq('user_id', selectedManager.id)
+
+          // Buscar código do novo estabelecimento
+          const { data: establishments } = await supabase
+            .from('establishment_codes')
+            .select('code')
+            .eq('name', formData.establishment_name)
+            .eq('is_active', true)
+            .limit(1)
+
+          if (establishments && establishments.length > 0) {
+            await supabase
+              .from('user_establishments')
+              .upsert({
+                user_id: selectedManager.id,
+                establishment_code: establishments[0].code,
+                status: 'active',
+                added_by: profile?.id
+              })
+          }
+        }
+
         toast.success('Gerente atualizado com sucesso!')
       }
 
@@ -917,12 +962,11 @@ export default function ManagersPage() {
                       <label className="block text-sm font-medium text-secondary-700 mb-2">
                         Estabelecimento
                       </label>
-                      <input
-                        type="text"
-                        className="input"
+                      <EstablishmentAutocomplete
                         value={formData.establishment_name}
-                        onChange={(e) => setFormData(prev => ({ ...prev, establishment_name: e.target.value }))}
-                        placeholder="Ex: Flex Academia, Strong Fitness"
+                        onChange={(value) => setFormData(prev => ({ ...prev, establishment_name: value }))}
+                        onCreateNew={handleCreateNewEstablishment}
+                        placeholder="Digite para buscar ou criar novo estabelecimento..."
                       />
                     </div>
 
