@@ -567,7 +567,7 @@ export default function ImprovedDashboardPage() {
     if (profile?.role === 'consultant') {
       return (
         <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-          <div className="flex items-start">
+          {/* <div className="flex items-start">
             <InformationCircleIcon className="h-5 w-5 text-primary-500 mr-3 mt-0.5" />
             <div>
               <h4 className="text-sm font-medium text-primary-900 mb-1">
@@ -582,7 +582,7 @@ export default function ImprovedDashboardPage() {
                 }
               </p>
             </div>
-          </div>
+          </div> */}
         </div>
       )
     } else if (profile?.role === 'manager') {
