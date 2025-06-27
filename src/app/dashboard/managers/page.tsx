@@ -106,7 +106,7 @@ export default function ManagersPage() {
           try {
             // Buscar estabelecimento do manager - SIMPLES
             let establishmentName = 'Estabelecimento não definido'
-            
+
             const { data: userEst } = await supabase
               .from('user_establishments')
               .select('establishment_code')
@@ -121,7 +121,7 @@ export default function ManagersPage() {
                 .select('name')
                 .eq('code', userEst.establishment_code)
                 .single()
-              
+
               if (estData?.name) {
                 establishmentName = estData.name
               }
@@ -198,9 +198,9 @@ export default function ManagersPage() {
       // Extrair estabelecimentos únicos - CORRIGIDO
       const uniqueEstablishments = managersWithStats
         .map(m => m.establishment_name)
-        .filter((name): name is string => 
-          name !== undefined && 
-          name !== 'Estabelecimento não definido' && 
+        .filter((name): name is string =>
+          name !== undefined &&
+          name !== 'Estabelecimento não definido' &&
           name !== 'Erro ao carregar'
         )
         .filter((name, index, array) => array.indexOf(name) === index)
@@ -216,25 +216,55 @@ export default function ManagersPage() {
     }
   }
 
-  const handleOpenModal = (mode: 'create' | 'edit', manager?: Manager) => {
+  const handleOpenModal = async (mode: 'create' | 'edit', manager?: Manager) => {
     setModalMode(mode)
     if (mode === 'edit' && manager) {
       setSelectedManager(manager)
+
+      // Buscar o estabelecimento atual do manager
+      let currentEstablishmentName = ''
+      try {
+        const { data: userEst } = await supabase
+          .from('user_establishments')
+          .select(`
+            establishment_code,
+            establishment_codes (
+              name
+            )
+          `)
+          .eq('user_id', manager.id)
+          .eq('status', 'active')
+          .limit(1)
+          .single()
+
+        if (userEst?.establishment_codes) {
+          // Verificar se é array ou objeto
+          const estCodes = userEst.establishment_codes as any
+          if (Array.isArray(estCodes) && estCodes.length > 0) {
+            currentEstablishmentName = estCodes[0].name || ''
+          } else if (estCodes && typeof estCodes === 'object' && 'name' in estCodes) {
+            currentEstablishmentName = estCodes.name || ''
+          }
+        }
+      } catch (error) {
+        console.error('Erro ao buscar estabelecimento:', error)
+      }
+
       setFormData({
         full_name: manager.full_name,
         email: manager.email,
         phone: manager.phone || '',
-        establishment_name: manager.establishment_name || '',
+        establishment_name: currentEstablishmentName,
         password: '',
       })
     } else {
       setSelectedManager(null)
-      setFormData({ 
-        full_name: '', 
-        email: '', 
-        phone: '', 
-        establishment_name: '', 
-        password: '' 
+      setFormData({
+        full_name: '',
+        email: '',
+        phone: '',
+        establishment_name: '',
+        password: ''
       })
     }
     setIsModalOpen(true)
@@ -758,22 +788,20 @@ export default function ManagersPage() {
                         <select
                           value={manager.status}
                           onChange={(e) => handleStatusChange(manager.id, e.target.value)}
-                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${
-                            manager.status === 'active' ? 'badge-success' :
-                            manager.status === 'inactive' ? 'badge-danger' :
-                              'badge-warning'
-                          }`}
+                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${manager.status === 'active' ? 'badge-success' :
+                              manager.status === 'inactive' ? 'badge-danger' :
+                                'badge-warning'
+                            }`}
                         >
                           <option value="active">Ativo</option>
                           <option value="inactive">Inativo</option>
                           <option value="pending">Pendente</option>
                         </select>
                       ) : (
-                        <span className={`badge ${
-                          manager.status === 'active' ? 'badge-success' :
-                          manager.status === 'inactive' ? 'badge-danger' :
-                            'badge-warning'
-                        }`}>
+                        <span className={`badge ${manager.status === 'active' ? 'badge-success' :
+                            manager.status === 'inactive' ? 'badge-danger' :
+                              'badge-warning'
+                          }`}>
                           {manager.status === 'active' ? 'Ativo' :
                             manager.status === 'inactive' ? 'Inativo' :
                               'Pendente'}

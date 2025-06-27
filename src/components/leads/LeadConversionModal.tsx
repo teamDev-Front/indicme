@@ -92,7 +92,7 @@ export default function LeadConversionModal({
 
   
     // E também corrija a função fetchConsultorStats:
-    const fetchConsultorStats = async () => {
+      const fetchConsultorStats = async () => {
         if (!lead) return
 
         try {
@@ -103,16 +103,14 @@ export default function LeadConversionModal({
                 .eq('indicated_by', lead.indicated_by)
                 .eq('status', 'converted')
 
-            const BONUS_A_CADA_ARCADAS = 7 // Valor fixo do sistema
-
-            const arcadasAtuais = leadsConvertidos?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+            const arcadasAtuais = leadsConvertidos?.reduce((sum, l) => sum + (l.arcadas_vendidas || 0), 0) || 0
             const proximasArcadas = arcadasAtuais + arcadasSelecionadas
-            const proximoBonusEm = BONUS_A_CADA_ARCADAS - (proximasArcadas % BONUS_A_CADA_ARCADAS)
+            const proximoBonusEm = commissionSettings.bonus_a_cada_arcadas - (proximasArcadas % commissionSettings.bonus_a_cada_arcadas)
 
             setConsultorStats({
                 arcadas_atuais: arcadasAtuais,
                 proximas_arcadas: proximasArcadas,
-                proximo_bonus_em: proximoBonusEm === BONUS_A_CADA_ARCADAS ? 0 : proximoBonusEm
+                proximo_bonus_em: proximoBonusEm === commissionSettings.bonus_a_cada_arcadas ? 0 : proximoBonusEm
             })
         } catch (error) {
             console.error('Erro ao buscar stats do consultor:', error)

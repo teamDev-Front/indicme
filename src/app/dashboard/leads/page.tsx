@@ -21,6 +21,8 @@ import {
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import LeadDetailModal from '@/components/leads/LeadDetailModal'
+import ArcadasModal from '@/components/leads/ArcadasModal'
+
 
 interface Lead {
   id: string
@@ -40,6 +42,10 @@ interface Lead {
   clinic_id: string
   created_at: string
   updated_at: string
+  arcadas_vendidas?: number
+  converted_at?: string
+  consultant_id?: string
+  manager_id?: string
   users?: {
     full_name: string
     email: string
@@ -66,8 +72,10 @@ export default function LeadsPage() {
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [consultants, setConsultants] = useState<Array<{id: string, full_name: string}>>([])
+  const [consultants, setConsultants] = useState<Array<{ id: string, full_name: string }>>([])
   const [states, setStates] = useState<string[]>([])
+  const [showArcadasModal, setShowArcadasModal] = useState(false)
+  const [selectedLeadForConversion, setSelectedLeadForConversion] = useState<Lead | null>(null)
   const supabase = createClient()
 
   useEffect(() => {
@@ -79,7 +87,7 @@ export default function LeadsPage() {
   const fetchLeads = async () => {
     try {
       setLoading(true)
-      
+
       let query = supabase
         .from('leads')
         .select(`
@@ -100,10 +108,10 @@ export default function LeadsPage() {
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
-        
+
         const consultantIds = hierarchy?.map(h => h.consultant_id) || []
         consultantIds.push(profile.id)
-        
+
         query = query.in('indicated_by', consultantIds)
       }
       // Clinic admin/viewer veem todos (sem filtros adicionais)
@@ -144,7 +152,7 @@ export default function LeadsPage() {
   const updateLeadStatus = async (leadId: string, newStatus: string) => {
     try {
       setUpdatingStatus(leadId)
-      
+
       const { error } = await supabase
         .from('leads')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
@@ -154,8 +162,8 @@ export default function LeadsPage() {
         throw error
       }
 
-      setLeads(prev => prev.map(lead => 
-        lead.id === leadId 
+      setLeads(prev => prev.map(lead =>
+        lead.id === leadId
           ? { ...lead, status: newStatus as any, updated_at: new Date().toISOString() }
           : lead
       ))
@@ -190,6 +198,106 @@ export default function LeadsPage() {
     }
   }
 
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      new: 'Novo',
+      contacted: 'Contatado',
+      qualified: 'Qualificado',
+      negotiation: 'Negociação',
+      converted: 'Convertido',
+      lost: 'Perdido'
+    }
+    return labels[status] || status
+  }
+
+  const handleUpdateStatus = async (leadId: string, newStatus: string, arcadas?: number) => {
+    try {
+      // Se está marcando como convertido e não passou arcadas, abrir modal
+      if (newStatus === 'converted' && !arcadas) {
+        const lead = leads.find(l => l.id === leadId)
+        if (lead) {
+          setSelectedLeadForConversion(lead)
+          setShowArcadasModal(true)
+          return
+        }
+      }
+
+      // Atualizar o lead
+      const updateData: any = {
+        status: newStatus,
+        updated_at: new Date().toISOString()
+      }
+
+      // Se for conversão, adicionar arcadas
+      if (newStatus === 'converted' && arcadas) {
+        updateData.arcadas_vendidas = arcadas
+        updateData.converted_at = new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('leads')
+        .update(updateData)
+        .eq('id', leadId)
+
+      if (error) throw error
+
+      // Se converteu, criar comissão apenas para leads convertidos
+      if (newStatus === 'converted' && arcadas) {
+        const lead = leads.find(l => l.id === leadId)
+        if (lead) {
+          // Calcular comissão baseada nas arcadas
+          const valorPorArcada = 750
+          const comissaoConsultor = arcadas * valorPorArcada
+
+          // Criar comissão do consultor
+          await supabase
+            .from('commissions')
+            .insert({
+              lead_id: leadId,
+              user_id: lead.consultant_id,
+              amount: comissaoConsultor,
+              valor_por_arcada: valorPorArcada,
+              arcadas_vendidas: arcadas,
+              type: 'consultant',
+              status: 'pending',
+              percentage: 100, // 100% do valor por arcada
+            })
+
+          // Se houver gerente, criar comissão do gerente (10% do valor total)
+          if (lead.manager_id) {
+            const comissaoGerente = comissaoConsultor * 0.10
+            await supabase
+              .from('commissions')
+              .insert({
+                lead_id: leadId,
+                user_id: lead.manager_id,
+                amount: comissaoGerente,
+                valor_por_arcada: valorPorArcada,
+                arcadas_vendidas: arcadas,
+                type: 'manager',
+                status: 'pending',
+                percentage: 10,
+              })
+          }
+        }
+      }
+
+      toast.success(`Status atualizado para ${getStatusLabel(newStatus)}`)
+      fetchLeads()
+    } catch (error) {
+      console.error('Erro ao atualizar status:', error)
+      toast.error('Erro ao atualizar status')
+    }
+  }
+
+  // Função para confirmar conversão com arcadas
+  const handleConfirmConversion = (arcadas: number) => {
+    if (selectedLeadForConversion) {
+      handleUpdateStatus(selectedLeadForConversion.id, 'converted', arcadas)
+      setSelectedLeadForConversion(null)
+    }
+  }
+
   const getStatusColor = (status: string) => {
     const option = statusOptions.find(opt => opt.value === status)
     return option?.color || 'secondary'
@@ -197,18 +305,18 @@ export default function LeadsPage() {
 
   // Filtrar leads com novos filtros
   const filteredLeads = leads.filter(lead => {
-    const matchesSearch = !searchTerm || 
+    const matchesSearch = !searchTerm ||
       lead.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.phone.includes(searchTerm) ||
       lead.cpf?.includes(searchTerm)
-    
+
     const matchesStatus = !statusFilter || lead.status === statusFilter
     const matchesState = !stateFilter || lead.state === stateFilter
     const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
-    
+
     const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
-    
+
     return matchesSearch && matchesStatus && matchesState && matchesConsultant && matchesDate
   })
 
@@ -240,13 +348,13 @@ export default function LeadsPage() {
             {profile?.role === 'consultant' ? 'Meus Leads' : 'Leads'}
           </h1>
           <p className="text-secondary-600">
-            {profile?.role === 'consultant' 
+            {profile?.role === 'consultant'
               ? 'Gerencie suas indicações'
               : 'Gerencie todos os leads da clínica'
             }
           </p>
         </div>
-        
+
         {canCreate && (
           <Link href="/dashboard/leads/new" className="btn btn-primary">
             <PlusIcon className="h-4 w-4 mr-2" />
@@ -376,7 +484,7 @@ export default function LeadsPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            
+
             <select
               className="input"
               value={statusFilter}
@@ -417,14 +525,14 @@ export default function LeadsPage() {
                 ))}
               </select>
             )}
-            
+
             <input
               type="date"
               className="input"
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
             />
-            
+
             <button
               onClick={() => {
                 setSearchTerm('')
@@ -571,9 +679,9 @@ export default function LeadsPage() {
                         {new Date(lead.created_at).toLocaleDateString('pt-BR')}
                       </div>
                       <div className="text-xs text-secondary-500">
-                        {new Date(lead.created_at).toLocaleTimeString('pt-BR', { 
-                          hour: '2-digit', 
-                          minute: '2-digit' 
+                        {new Date(lead.created_at).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit'
                         })}
                       </div>
                     </td>
@@ -601,7 +709,7 @@ export default function LeadsPage() {
                 ))}
               </tbody>
             </table>
-            
+
             {filteredLeads.length === 0 && (
               <div className="text-center py-12">
                 <div className="text-secondary-400 mb-4">
@@ -615,7 +723,7 @@ export default function LeadsPage() {
                   {leads.length === 0 ? 'Nenhum lead encontrado' : 'Nenhum resultado encontrado'}
                 </h3>
                 <p className="text-sm text-secondary-500">
-                  {leads.length === 0 
+                  {leads.length === 0
                     ? 'Comece criando seu primeiro lead.'
                     : 'Tente ajustar os filtros ou termo de busca.'
                   }
@@ -642,6 +750,18 @@ export default function LeadsPage() {
         leadId={selectedLeadId}
         onLeadUpdate={fetchLeads}
       />
+
+      {showArcadasModal && selectedLeadForConversion && (
+        <ArcadasModal
+          isOpen={showArcadasModal}
+          onClose={() => {
+            setShowArcadasModal(false)
+            setSelectedLeadForConversion(null)
+          }}
+          onConfirm={handleConfirmConversion}
+          leadName={selectedLeadForConversion.full_name}
+        />
+      )}
     </div>
   )
 }
