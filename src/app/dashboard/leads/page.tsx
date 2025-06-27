@@ -564,7 +564,7 @@ export default function LeadsPage() {
                 <tr>
                   <th>Nome</th>
                   <th>Contato</th>
-                  <th>Estado</th>
+                  {/* <th>Estado</th> */}
                   <th>Status</th>
                   {profile?.role !== 'consultant' && <th>Indicado por</th>}
                   <th>Data</th>
@@ -612,7 +612,7 @@ export default function LeadsPage() {
                         )}
                       </div>
                     </td>
-                    <td>
+                    {/* <td>
                       <div className="flex items-center">
                         <MapPinIcon className="h-4 w-4 text-secondary-400 mr-2" />
                         <div>
@@ -631,7 +631,7 @@ export default function LeadsPage() {
                           )}
                         </div>
                       </div>
-                    </td>
+                    </td> */}
                     <td>
                       {canEdit ? (
                         <select
