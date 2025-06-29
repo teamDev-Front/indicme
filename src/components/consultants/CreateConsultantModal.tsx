@@ -125,8 +125,6 @@ export default function CreateConsultantModal({
         throw new Error('Clínica não encontrada. Verifique se você está associado a uma clínica.')
       }
 
-      console.log('✅ Clínica encontrada:', userClinic.clinic_id)
-
       // 2. Criar usuário no auth
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: formData.email,
@@ -143,102 +141,76 @@ export default function CreateConsultantModal({
       }
 
       const newUserId = signUpData.user.id
-      console.log('✅ Usuário criado no auth:', newUserId)
 
       // 3. Aguardar propagação
       await new Promise(resolve => setTimeout(resolve, 2000))
 
-      // 4. Criar perfil com retry
-      let profileCreated = false
-      let retries = 3
+      // 4. Criar perfil (SEM ON CONFLICT)
+      const { error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: newUserId,
+          email: formData.email,
+          full_name: formData.full_name,
+          phone: formData.phone || null,
+          role: 'consultant',
+          status: 'active',
+        })
 
-      while (!profileCreated && retries > 0) {
-        try {
-          const { error: profileError } = await supabase
+      if (profileError) {
+        // Se der erro de duplicata, tentar update
+        if (profileError.code === '23505') {
+          const { error: updateError } = await supabase
             .from('users')
-            .upsert({
-              id: newUserId,
+            .update({
               email: formData.email,
               full_name: formData.full_name,
               phone: formData.phone || null,
               role: 'consultant',
               status: 'active',
-            }, {
-              onConflict: 'id'
+              updated_at: new Date().toISOString()
             })
+            .eq('id', newUserId)
 
-          if (profileError) {
-            console.warn(`Tentativa ${4 - retries} falhou:`, profileError)
-            retries--
-            if (retries > 0) {
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              continue
-            }
-            throw profileError
-          }
-
-          profileCreated = true
-          console.log('✅ Perfil criado com sucesso')
-        } catch (error) {
-          retries--
-          if (retries === 0) throw error
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          if (updateError) throw updateError
+        } else {
+          throw profileError
         }
       }
 
-      // 5. Associar à clínica com retry
-      let clinicAssociated = false
-      retries = 3
+      // 5. Associar à clínica (SEM ON CONFLICT)
+      const { error: clinicAssocError } = await supabase
+        .from('user_clinics')
+        .insert({
+          user_id: newUserId,
+          clinic_id: userClinic.clinic_id,
+        })
 
-      while (!clinicAssociated && retries > 0) {
-        try {
-          const { error: clinicAssocError } = await supabase
-            .from('user_clinics')
-            .upsert({
-              user_id: newUserId,
-              clinic_id: userClinic.clinic_id,
-            }, {
-              onConflict: 'user_id,clinic_id'
-            })
-
-          if (clinicAssocError) {
-            console.warn(`Associação clínica tentativa ${4 - retries} falhou:`, clinicAssocError)
-            retries--
-            if (retries > 0) {
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              continue
-            }
-            throw clinicAssocError
-          }
-
-          clinicAssociated = true
-          console.log('✅ Usuário associado à clínica')
-        } catch (error) {
-          retries--
-          if (retries === 0) throw error
-          await new Promise(resolve => setTimeout(resolve, 1000))
+      if (clinicAssocError) {
+        // Se der erro de duplicata, ignorar (já está associado)
+        if (clinicAssocError.code !== '23505') {
+          throw clinicAssocError
         }
       }
 
-      // 6. Criar hierarquia (consultor vinculado ao gerente)
+      // 6. Criar hierarquia (SEM ON CONFLICT)
       const { error: hierarchyError } = await supabase
         .from('hierarchies')
-        .upsert({
+        .insert({
           manager_id: profile.id,
           consultant_id: newUserId,
           clinic_id: userClinic.clinic_id,
-        }, {
-          onConflict: 'manager_id,consultant_id'
         })
 
       if (hierarchyError) {
-        console.warn('Erro ao criar hierarquia:', hierarchyError)
-        toast.error('Consultor criado, mas não foi vinculado à sua equipe')
-      } else {
-        console.log('✅ Hierarquia criada - consultor vinculado ao gerente')
+        // Se der erro de duplicata, ignorar (já está na hierarquia)
+        if (hierarchyError.code !== '23505') {
+          console.warn('Erro ao criar hierarquia:', hierarchyError)
+          toast.error('Consultor criado, mas não foi vinculado à sua equipe')
+        }
       }
 
-      // 7. Vincular ao estabelecimento do gerente (ÚNICO estabelecimento)
+      // 7. Vincular ao estabelecimento do gerente
       const { error: establishmentError } = await supabase
         .from('user_establishments')
         .insert({
@@ -251,8 +223,6 @@ export default function CreateConsultantModal({
       if (establishmentError) {
         console.warn('Erro ao vincular ao estabelecimento:', establishmentError)
         toast.error('Consultor criado, mas houve problema ao vincular ao estabelecimento')
-      } else {
-        console.log('✅ Consultor vinculado ao estabelecimento:', managerEstablishment.name)
       }
 
       toast.success(`Consultor criado e vinculado ao estabelecimento ${managerEstablishment.name}!`)

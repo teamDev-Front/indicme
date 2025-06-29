@@ -404,7 +404,7 @@ export default function TeamPage() {
             const { data: establishmentCode, error: estError } = await supabase
                 .from('establishment_codes')
                 .select('code')
-                .eq('name', managerEstablishments[0]) // Primeiro estabelecimento do gerente
+                .eq('name', managerEstablishments[0])
                 .single()
 
             if (estError || !establishmentCode) {
@@ -431,46 +431,69 @@ export default function TeamPage() {
             // 4. Aguardar propagação
             await new Promise(resolve => setTimeout(resolve, 2000))
 
-            // 5. Criar perfil
+            // 5. Criar perfil (SEM ON CONFLICT)
             const { error: profileError } = await supabase
                 .from('users')
-                .upsert({
+                .insert({
                     id: newUserId,
                     email: newConsultantForm.email,
                     full_name: newConsultantForm.full_name,
                     phone: newConsultantForm.phone || null,
                     role: 'consultant',
                     status: 'active',
-                }, {
-                    onConflict: 'id'
                 })
 
-            if (profileError) throw profileError
+            if (profileError) {
+                // Se der erro de duplicata, tentar update
+                if (profileError.code === '23505') {
+                    const { error: updateError } = await supabase
+                        .from('users')
+                        .update({
+                            email: newConsultantForm.email,
+                            full_name: newConsultantForm.full_name,
+                            phone: newConsultantForm.phone || null,
+                            role: 'consultant',
+                            status: 'active',
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', newUserId)
 
-            // 6. Associar à clínica
+                    if (updateError) throw updateError
+                } else {
+                    throw profileError
+                }
+            }
+
+            // 6. Associar à clínica (SEM ON CONFLICT)
             const { error: clinicAssocError } = await supabase
                 .from('user_clinics')
-                .upsert({
+                .insert({
                     user_id: newUserId,
                     clinic_id: userClinic.clinic_id,
-                }, {
-                    onConflict: 'user_id,clinic_id'
                 })
 
-            if (clinicAssocError) throw clinicAssocError
+            if (clinicAssocError) {
+                // Se der erro de duplicata, ignorar (já está associado)
+                if (clinicAssocError.code !== '23505') {
+                    throw clinicAssocError
+                }
+            }
 
-            // 7. Criar hierarquia (adicionar à equipe do gerente)
+            // 7. Criar hierarquia (SEM ON CONFLICT)
             const { error: hierarchyError } = await supabase
                 .from('hierarchies')
-                .upsert({
+                .insert({
                     manager_id: profile.id,
                     consultant_id: newUserId,
                     clinic_id: userClinic.clinic_id,
-                }, {
-                    onConflict: 'manager_id,consultant_id'
                 })
 
-            if (hierarchyError) throw hierarchyError
+            if (hierarchyError) {
+                // Se der erro de duplicata, ignorar (já está na hierarquia)
+                if (hierarchyError.code !== '23505') {
+                    throw hierarchyError
+                }
+            }
 
             // 8. Vincular ao estabelecimento do gerente
             const { error: establishmentError } = await supabase
@@ -482,7 +505,10 @@ export default function TeamPage() {
                     added_by: profile.id
                 })
 
-            if (establishmentError) throw establishmentError
+            if (establishmentError) {
+                console.warn('Erro ao vincular ao estabelecimento:', establishmentError)
+                toast.error('Consultor criado, mas houve problema ao vincular ao estabelecimento')
+            }
 
             toast.success(`Consultor criado e adicionado à sua equipe!`)
 
@@ -496,7 +522,6 @@ export default function TeamPage() {
 
             setIsAddModalOpen(false)
             await fetchTeamData()
-            await fetchAvailableConsultants()
 
         } catch (error: any) {
             console.error('Erro ao criar consultor:', error)
