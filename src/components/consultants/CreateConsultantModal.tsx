@@ -3,11 +3,11 @@
 
 import { Fragment, useState, useEffect } from 'react'
 import { Dialog, Transition } from '@headlessui/react'
-import { 
-  XMarkIcon, 
+import {
+  XMarkIcon,
   UserPlusIcon,
   BuildingOfficeIcon,
-  InformationCircleIcon 
+  InformationCircleIcon
 } from '@heroicons/react/24/outline'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
@@ -25,10 +25,10 @@ interface CreateConsultantModalProps {
   onSuccess: () => void
 }
 
-export default function CreateConsultantModal({ 
-  isOpen, 
-  onClose, 
-  onSuccess 
+export default function CreateConsultantModal({
+  isOpen,
+  onClose,
+  onSuccess
 }: CreateConsultantModalProps) {
   const { profile } = useAuth()
   const [formData, setFormData] = useState({
@@ -66,13 +66,14 @@ export default function CreateConsultantModal({
   }
 
   const handleCodeToggle = (code: string) => {
-    setSelectedCodes(prev => 
-      prev.includes(code) 
+    setSelectedCodes(prev =>
+      prev.includes(code)
         ? prev.filter(c => c !== code)
         : [...prev, code]
     )
   }
 
+  // CreateConsultantModal.tsx - Versão corrigida
   const handleCreateConsultant = async () => {
     if (selectedCodes.length === 0) {
       toast.error('Selecione pelo menos um estabelecimento')
@@ -82,7 +83,20 @@ export default function CreateConsultantModal({
     try {
       setSubmitting(true)
 
-      // 1. Criar usuário no auth
+      // 1. Buscar clínica ANTES de criar o usuário
+      const { data: userClinic, error: clinicError } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile?.id)
+        .single()
+
+      if (clinicError || !userClinic) {
+        throw new Error('Clínica não encontrada. Verifique se você está associado a uma clínica.')
+      }
+
+      console.log('✅ Clínica encontrada:', userClinic.clinic_id)
+
+      // 2. Criar usuário no auth
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -98,67 +112,125 @@ export default function CreateConsultantModal({
       }
 
       const newUserId = signUpData.user.id
-      
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      console.log('✅ Usuário criado no auth:', newUserId)
 
-      // 2. Criar perfil
-      const { error: profileError } = await supabase
-        .from('users')
-        .upsert({
-          id: newUserId,
-          email: formData.email,
-          full_name: formData.full_name,
-          phone: formData.phone || null,
-          role: 'consultant',
-          status: 'active',
-        })
+      // 3. Aguardar propagação (mais tempo para garantir)
+      await new Promise(resolve => setTimeout(resolve, 2000))
 
-      if (profileError) throw profileError
+      // 4. Usar UPSERT com retry para o perfil
+      let profileCreated = false
+      let retries = 3
 
-      // 3. Buscar clínica
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
+      while (!profileCreated && retries > 0) {
+        try {
+          const { error: profileError } = await supabase
+            .from('users')
+            .upsert({
+              id: newUserId,
+              email: formData.email,
+              full_name: formData.full_name,
+              phone: formData.phone || null,
+              role: 'consultant',
+              status: 'active',
+            }, {
+              onConflict: 'id'
+            })
 
-      if (!userClinic) throw new Error('Clínica não encontrada')
+          if (profileError) {
+            console.warn(`Tentativa ${4 - retries} falhou:`, profileError)
+            retries--
+            if (retries > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              continue
+            }
+            throw profileError
+          }
 
-      // 4. Associar à clínica
-      await supabase
-        .from('user_clinics')
-        .upsert({
-          user_id: newUserId,
-          clinic_id: userClinic.clinic_id,
-        })
-
-      // 5. Criar hierarquia (indicador sob este gerente)
-      await supabase
-        .from('hierarchies')
-        .upsert({
-          manager_id: profile?.id,
-          consultant_id: newUserId,
-          clinic_id: userClinic.clinic_id,
-        })
-
-      // 6. NOVO: Vincular aos estabelecimentos selecionados
-      const establishmentInserts = selectedCodes.map(code => ({
-        user_id: newUserId,
-        establishment_code: code,
-        status: 'active',
-        added_by: profile?.id  // Quem adicionou (o gerente)
-      }))
-
-      const { error: establishmentError } = await supabase
-        .from('user_establishments')
-        .insert(establishmentInserts)
-
-      if (establishmentError) {
-        console.warn('Erro ao vincular estabelecimentos:', establishmentError)
+          profileCreated = true
+          console.log('✅ Perfil criado com sucesso')
+        } catch (error) {
+          retries--
+          if (retries === 0) throw error
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
       }
 
-      toast.success(`Indicador criado e vinculado a ${selectedCodes.length} estabelecimento(s)!`)
-      
+      // 5. Associar à clínica com retry
+      let clinicAssociated = false
+      retries = 3
+
+      while (!clinicAssociated && retries > 0) {
+        try {
+          const { error: clinicAssocError } = await supabase
+            .from('user_clinics')
+            .upsert({
+              user_id: newUserId,
+              clinic_id: userClinic.clinic_id,
+            }, {
+              onConflict: 'user_id,clinic_id'
+            })
+
+          if (clinicAssocError) {
+            console.warn(`Associação clínica tentativa ${4 - retries} falhou:`, clinicAssocError)
+            retries--
+            if (retries > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              continue
+            }
+            throw clinicAssocError
+          }
+
+          clinicAssociated = true
+          console.log('✅ Usuário associado à clínica')
+        } catch (error) {
+          retries--
+          if (retries === 0) throw error
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      }
+
+      // 6. Criar hierarquia (se for manager criando consultor)
+      if (profile?.role === 'manager') {
+        const { error: hierarchyError } = await supabase
+          .from('hierarchies')
+          .upsert({
+            manager_id: profile.id,
+            consultant_id: newUserId,
+            clinic_id: userClinic.clinic_id,
+          }, {
+            onConflict: 'manager_id,consultant_id'
+          })
+
+        if (hierarchyError) {
+          console.warn('Erro ao criar hierarquia (não crítico):', hierarchyError)
+        } else {
+          console.log('✅ Hierarquia criada')
+        }
+      }
+
+      // 7. Vincular estabelecimentos
+      if (selectedCodes.length > 0) {
+        const establishmentInserts = selectedCodes.map(code => ({
+          user_id: newUserId,
+          establishment_code: code,
+          status: 'active' as const,
+          added_by: profile?.id
+        }))
+
+        const { error: establishmentError } = await supabase
+          .from('user_establishments')
+          .insert(establishmentInserts)
+
+        if (establishmentError) {
+          console.warn('Erro ao vincular estabelecimentos (não crítico):', establishmentError)
+          toast.error('Consultor criado, mas houve problema ao vincular estabelecimentos')
+        } else {
+          console.log('✅ Estabelecimentos vinculados')
+        }
+      }
+
+      toast.success(`Consultor criado e vinculado a ${selectedCodes.length} estabelecimento(s)!`)
+
       // Resetar form
       setFormData({
         full_name: '',
@@ -168,12 +240,23 @@ export default function CreateConsultantModal({
         establishment_codes: []
       })
       setSelectedCodes([])
-      
+
       onClose()
       onSuccess()
+
     } catch (error: any) {
-      console.error('Erro ao criar indicador:', error)
-      toast.error(error.message || 'Erro ao criar indicador')
+      console.error('❌ Erro completo ao criar consultor:', error)
+
+      // Mensagens de erro mais específicas
+      if (error.message.includes('Clínica não encontrada')) {
+        toast.error('Erro: Você não está associado a uma clínica. Contate o administrador.')
+      } else if (error.message.includes('already registered')) {
+        toast.error('Este email já está cadastrado no sistema.')
+      } else if (error.message.includes('Invalid login credentials')) {
+        toast.error('Credenciais inválidas. Verifique email e senha.')
+      } else {
+        toast.error(`Erro ao criar consultor: ${error.message}`)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -214,7 +297,7 @@ export default function CreateConsultantModal({
                   {/* Dados Pessoais */}
                   <div className="space-y-4">
                     <h4 className="text-sm font-medium text-secondary-900">Dados Pessoais</h4>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-secondary-700 mb-2">
                         Nome Completo
@@ -350,10 +433,10 @@ export default function CreateConsultantModal({
                     className="btn btn-primary"
                     onClick={handleCreateConsultant}
                     disabled={
-                      submitting || 
-                      !formData.full_name || 
-                      !formData.email || 
-                      !formData.password || 
+                      submitting ||
+                      !formData.full_name ||
+                      !formData.email ||
+                      !formData.password ||
                       selectedCodes.length === 0
                     }
                   >

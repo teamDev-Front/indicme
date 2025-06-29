@@ -117,28 +117,105 @@ export default function SettingsPage() {
     }
   }
 
+  // settings/page.tsx - Função fetchSettings corrigida
   const fetchSettings = async () => {
     try {
       setLoading(true)
 
-      // Buscar clínica do usuário
-      const { data: userClinic, error: userClinicError } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
+      // Para clinic_admin, buscar clínica de forma mais robusta
+      let clinicId: string | null = null
 
-      if (userClinicError || !userClinic) {
-        console.error('Erro ao buscar clínica do usuário:', userClinicError)
-        throw new Error('Usuário não está associado a uma clínica')
+      if (profile?.role === 'clinic_admin') {
+        // Primeira tentativa: buscar via user_clinics
+        const { data: userClinic, error: userClinicError } = await supabase
+          .from('user_clinics')
+          .select('clinic_id')
+          .eq('user_id', profile.id)
+          .maybeSingle()
+
+        if (userClinic && userClinic.clinic_id) {
+          clinicId = userClinic.clinic_id
+          console.log('✅ Clínica encontrada via user_clinics:', clinicId)
+        } else {
+          console.log('⚠️ Não encontrou via user_clinics, tentando criar associação...')
+
+          // Segunda tentativa: buscar todas as clínicas e associar o admin à primeira
+          const { data: clinics, error: clinicsError } = await supabase
+            .from('clinics')
+            .select('id, name')
+            .eq('status', 'active')
+            .limit(1)
+
+          if (clinicsError) {
+            console.error('Erro ao buscar clínicas:', clinicsError)
+            throw new Error('Erro ao buscar clínicas disponíveis')
+          }
+
+          if (clinics && clinics.length > 0) {
+            clinicId = clinics[0].id
+            console.log('✅ Clínica encontrada:', clinics[0].name)
+
+            // Tentar associar o admin a esta clínica
+            const { error: associationError } = await supabase
+              .from('user_clinics')
+              .upsert({
+                user_id: profile.id,
+                clinic_id: clinicId
+              }, {
+                onConflict: 'user_id,clinic_id'
+              })
+
+            if (associationError) {
+              console.warn('Erro ao associar admin à clínica:', associationError)
+            } else {
+              console.log('✅ Admin associado à clínica automaticamente')
+            }
+          } else {
+            // Se não tem clínicas, criar uma clínica padrão para o super admin
+            console.log('⚠️ Nenhuma clínica encontrada, criando clínica padrão...')
+
+            const { data: newClinic, error: createClinicError } = await supabase
+              .from('clinics')
+              .insert({
+                name: 'Clínica Principal',
+                status: 'active'
+              })
+              .select('id')
+              .single()
+
+            if (createClinicError) {
+              console.error('Erro ao criar clínica padrão:', createClinicError)
+              throw new Error('Erro ao criar clínica padrão')
+            }
+
+            clinicId = newClinic.id
+
+            // Associar o admin à nova clínica
+            await supabase
+              .from('user_clinics')
+              .insert({
+                user_id: profile.id,
+                clinic_id: clinicId
+              })
+
+            console.log('✅ Clínica padrão criada e admin associado')
+            toast.success('Clínica principal criada automaticamente')
+          }
+        }
+      } else {
+        throw new Error('Acesso negado: apenas administradores podem acessar configurações')
+      }
+
+      if (!clinicId) {
+        throw new Error('Não foi possível determinar a clínica para este usuário')
       }
 
       // Buscar configurações de comissão
       const { data: commissionData, error: commissionError } = await supabase
         .from('commission_settings')
         .select('*')
-        .eq('clinic_id', userClinic.clinic_id)
-        .maybeSingle() // Usar maybeSingle ao invés de single para não dar erro se não existir
+        .eq('clinic_id', clinicId)
+        .maybeSingle()
 
       if (commissionError && commissionError.code !== 'PGRST116') {
         console.error('Erro ao buscar configurações de comissão:', commissionError)
@@ -148,39 +225,51 @@ export default function SettingsPage() {
       if (commissionData) {
         setCommissionSettings({
           ...commissionData,
-          // Garantir que os valores sejam números
           valor_por_arcada: Number(commissionData.valor_por_arcada) || 750,
           bonus_a_cada_arcadas: Number(commissionData.bonus_a_cada_arcadas) || 7,
           valor_bonus: Number(commissionData.valor_bonus) || 750,
         })
+        console.log('✅ Configurações de comissão carregadas')
       } else {
         // Se não existe configuração, usar valores padrão
         setCommissionSettings(prev => ({
           ...prev,
-          clinic_id: userClinic.clinic_id,
+          clinic_id: clinicId,
           valor_por_arcada: 750,
           bonus_a_cada_arcadas: 7,
           valor_bonus: 750,
         }))
+        console.log('✅ Usando configurações padrão')
       }
 
       // Buscar dados da clínica
       const { data: clinicData, error: clinicError } = await supabase
         .from('clinics')
         .select('*')
-        .eq('id', userClinic.clinic_id)
+        .eq('id', clinicId)
         .maybeSingle()
 
       if (clinicError) {
         console.error('Erro ao buscar dados da clínica:', clinicError)
       } else if (clinicData) {
         setClinicSettings(clinicData)
+        console.log('✅ Dados da clínica carregados:', clinicData.name)
       }
 
       setHasChanges(false)
+      console.log('✅ Todas as configurações carregadas com sucesso')
+
     } catch (error: any) {
-      console.error('Erro ao buscar configurações:', error)
-      toast.error(`Erro ao carregar configurações: ${error.message}`)
+      console.error('❌ Erro ao buscar configurações:', error)
+
+      // Mensagens de erro mais específicas
+      if (error.message.includes('Acesso negado')) {
+        toast.error('Acesso restrito: apenas administradores podem ver configurações')
+      } else if (error.message.includes('clínica')) {
+        toast.error('Problema com associação à clínica. Contate o suporte.')
+      } else {
+        toast.error(`Erro ao carregar configurações: ${error.message}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -307,7 +396,7 @@ export default function SettingsPage() {
       setSaving(false)
     }
   }
-  
+
   const preview = calculatePreview()
 
   const tabs = [
