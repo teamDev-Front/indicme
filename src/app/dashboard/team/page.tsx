@@ -1300,7 +1300,7 @@ export default function TeamPage() {
                                                             <li>Consultores estão em outras equipes</li>
                                                         </ul>
                                                         <p className="text-primary-600 font-medium">
-                                                            💡 Dica: Use a opção "Criar Novo" para adicionar um consultor à sua equipe!
+                                                            💡 Dica: Use a opção &quote;Criar Novo&quote; para adicionar um consultor à sua equipe!
                                                         </p>
                                                     </div>
                                                 </div>
