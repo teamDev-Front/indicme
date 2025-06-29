@@ -471,7 +471,7 @@ export default function TeamPage() {
                     <button
                         onClick={() => setIsAddModalOpen(true)}
                         className="btn btn-primary"
-                        disabled={loading || availableConsultants.length === 0}
+                        
                     >
                         <UserPlusIcon className="h-4 w-4 mr-2" />
                         Adicionar à Equipe
