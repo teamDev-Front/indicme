@@ -66,18 +66,10 @@ interface TeamStats {
     totalPaidCommissions: number
 }
 
-interface ConsultantOption {
-    id: string
-    full_name: string
-    email: string
-    establishment_names: string[]
-    current_manager?: string
-}
 
 export default function TeamPage() {
     const { profile } = useAuth()
     const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
-    const [availableConsultants, setAvailableConsultants] = useState<ConsultantOption[]>([])
     const [managerEstablishments, setManagerEstablishments] = useState<string[]>([])
     const [teamStats, setTeamStats] = useState<TeamStats>({
         totalMembers: 0,
@@ -97,10 +89,8 @@ export default function TeamPage() {
 
     // NOVO ESTADO PARA CONTROLAR O TIPO DE MODAL
     const [isAddModalOpen, setIsAddModalOpen] = useState(false)
-    const [modalType, setModalType] = useState<'create_new' | 'add_existing'>('create_new')
 
     const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false)
-    const [selectedConsultantId, setSelectedConsultantId] = useState('')
     const [submitting, setSubmitting] = useState(false)
 
     // NOVO ESTADO PARA FORMULÁRIO DE CRIAÇÃO
@@ -120,11 +110,7 @@ export default function TeamPage() {
         }
     }, [profile])
 
-    useEffect(() => {
-        if (managerEstablishments.length > 0) {
-            fetchAvailableConsultants()
-        }
-    }, [managerEstablishments])
+
 
     // Funções existentes mantidas (fetchManagerEstablishments, fetchTeamData, fetchAvailableConsultants)
     const fetchManagerEstablishments = async () => {
@@ -278,10 +264,7 @@ export default function TeamPage() {
 
     const fetchAvailableConsultants = async () => {
         try {
-            if (managerEstablishments.length === 0) {
-                setAvailableConsultants([])
-                return
-            }
+
 
             const { data: establishmentCodes, error: codesError } = await supabase
                 .from('establishment_codes')
@@ -292,10 +275,6 @@ export default function TeamPage() {
 
             const codes = establishmentCodes?.map(ec => ec.code) || []
 
-            if (codes.length === 0) {
-                setAvailableConsultants([])
-                return
-            }
 
             const { data: consultantsInEstablishments, error: consultantsError } = await supabase
                 .from('user_establishments')
@@ -388,12 +367,11 @@ export default function TeamPage() {
                 }
             }
 
-            setAvailableConsultants(availableConsultantsList)
 
         } catch (error: any) {
             console.error('❌ Erro ao buscar consultores disponíveis:', error)
             toast.error('Erro ao buscar consultores disponíveis')
-            setAvailableConsultants([])
+
         }
     }
 
@@ -532,65 +510,6 @@ export default function TeamPage() {
         }
     }
 
-    // =====================================================
-
-    // CORREÇÃO 3: Team Page - Função handleAddConsultantToTeam
-    const handleAddConsultantToTeam = async () => {
-        if (!selectedConsultantId || !profile) {
-            toast.error('Dados incompletos para adicionar consultor')
-            return
-        }
-
-        try {
-            setSubmitting(true)
-
-            const { data: userClinic } = await supabase
-                .from('user_clinics')
-                .select('clinic_id')
-                .eq('user_id', profile.id)
-                .single()
-
-            if (!userClinic) throw new Error('Clínica não encontrada')
-
-            const { data: existingHierarchy } = await supabase
-                .from('hierarchies')
-                .select('manager_id, users!hierarchies_manager_id_fkey(full_name)')
-                .eq('consultant_id', selectedConsultantId)
-                .maybeSingle()
-
-            if (existingHierarchy) {
-                const managerData = Array.isArray(existingHierarchy.users)
-                    ? existingHierarchy.users[0]
-                    : existingHierarchy.users
-                const managerName = managerData?.full_name || 'Outro gerente'
-                toast.error(`Este consultor já está na equipe de: ${managerName}`)
-                return
-            }
-
-            const { error } = await supabase
-                .from('hierarchies')
-                .insert({
-                    manager_id: profile.id,
-                    consultant_id: selectedConsultantId,
-                    clinic_id: userClinic.clinic_id,
-                })
-
-            if (error) throw error
-
-            toast.success('Consultor adicionado à sua equipe com sucesso!')
-            setIsAddModalOpen(false)
-            setSelectedConsultantId('')
-            await fetchTeamData()
-            await fetchAvailableConsultants()
-        } catch (error: any) {
-            console.error('Erro ao adicionar consultor à equipe:', error)
-            toast.error('Erro ao adicionar consultor à equipe')
-        } finally {
-            setSubmitting(false)
-        }
-    }
-
-    // =====================================================
 
     // CORREÇÃO 4: Team Page - Função handleRemoveFromTeam
     const handleRemoveFromTeam = async () => {
@@ -751,10 +670,7 @@ export default function TeamPage() {
                         Ver Todos Consultores
                     </Link>
                     <button
-                        onClick={() => {
-                            setModalType('create_new')
-                            setIsAddModalOpen(true)
-                        }}
+                        onClick={() => setIsAddModalOpen(true)}
                         className="btn btn-primary"
                     >
                         <UserPlusIcon className="h-4 w-4 mr-2" />
@@ -1060,16 +976,14 @@ export default function TeamPage() {
                                 </p>
                                 {teamMembers.length === 0 && (
                                     <button
-                                        onClick={() => {
-                                            setModalType('create_new')
-                                            setIsAddModalOpen(true)
-                                        }}
+                                        onClick={() => setIsAddModalOpen(true)} // ❌ REMOVER: setModalType('create_new')
                                         className="btn btn-primary mt-4"
                                     >
                                         <UserPlusIcon className="h-4 w-4 mr-2" />
                                         Adicionar Primeiro Membro
                                     </button>
                                 )}
+
                             </div>
                         )}
                     </div>
@@ -1107,37 +1021,8 @@ export default function TeamPage() {
                                         Adicionar Consultor à Minha Equipe
                                     </Dialog.Title>
 
-                                    {/* NOVA SEÇÃO: Escolha do tipo de ação */}
-                                    <div className="space-y-4 mb-6">
-                                        <h4 className="text-sm font-medium text-secondary-900">Como deseja adicionar?</h4>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <button
-                                                onClick={() => setModalType('create_new')}
-                                                className={`p-4 rounded-lg border-2 transition-all ${modalType === 'create_new'
-                                                    ? 'border-primary-500 bg-primary-50 text-primary-700'
-                                                    : 'border-secondary-200 hover:border-secondary-300'
-                                                    }`}
-                                            >
-                                                <UserPlusIcon className="h-6 w-6 mx-auto mb-2" />
-                                                <div className="text-sm font-medium">Criar Novo</div>
-                                                <div className="text-xs">Consultor</div>
-                                            </button>
-                                            <button
-                                                onClick={() => setModalType('add_existing')}
-                                                className={`p-4 rounded-lg border-2 transition-all ${modalType === 'add_existing'
-                                                    ? 'border-primary-500 bg-primary-50 text-primary-700'
-                                                    : 'border-secondary-200 hover:border-secondary-300'
-                                                    }`}
-                                            >
-                                                <UsersIcon className="h-6 w-6 mx-auto mb-2" />
-                                                <div className="text-sm font-medium">Adicionar</div>
-                                                <div className="text-xs">Existente</div>
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Info sobre estabelecimentos do gerente */}
-                                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                                    {/* Info sobre estabelecimento do gerente */}
+                                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6">
                                         <div className="flex items-start">
                                             <BuildingOfficeIcon className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
                                             <div>
@@ -1150,163 +1035,85 @@ export default function TeamPage() {
                                                     )}
                                                 </div>
                                                 <p className="text-xs text-blue-600 mt-1">
-                                                    O consultor será automaticamente vinculado a este estabelecimento
+                                                    O consultor será automaticamente vinculado a este estabelecimento e à sua equipe
                                                 </p>
                                             </div>
                                         </div>
                                     </div>
 
-                                    {/* CRIAR NOVO CONSULTOR */}
-                                    {modalType === 'create_new' && (
-                                        <div className="space-y-4">
-                                            <h4 className="text-sm font-medium text-secondary-900">Dados do Novo Consultor</h4>
+                                    {/* Formulário do Novo Consultor */}
+                                    <div className="space-y-4">
+                                        <h4 className="text-sm font-medium text-secondary-900">Dados do Novo Consultor</h4>
 
+                                        <div>
+                                            <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                Nome Completo *
+                                            </label>
+                                            <input
+                                                type="text"
+                                                className="input"
+                                                value={newConsultantForm.full_name}
+                                                onChange={(e) => setNewConsultantForm(prev => ({ ...prev, full_name: e.target.value }))}
+                                                placeholder="Nome completo do consultor"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                    Nome Completo *
+                                                    Email *
                                                 </label>
                                                 <input
-                                                    type="text"
+                                                    type="email"
                                                     className="input"
-                                                    value={newConsultantForm.full_name}
-                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, full_name: e.target.value }))}
-                                                    placeholder="Nome completo do consultor"
+                                                    value={newConsultantForm.email}
+                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, email: e.target.value }))}
+                                                    placeholder="email@exemplo.com"
                                                 />
-                                            </div>
-
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                        Email *
-                                                    </label>
-                                                    <input
-                                                        type="email"
-                                                        className="input"
-                                                        value={newConsultantForm.email}
-                                                        onChange={(e) => setNewConsultantForm(prev => ({ ...prev, email: e.target.value }))}
-                                                        placeholder="email@exemplo.com"
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                        Telefone
-                                                    </label>
-                                                    <input
-                                                        type="tel"
-                                                        className="input"
-                                                        value={newConsultantForm.phone}
-                                                        onChange={(e) => setNewConsultantForm(prev => ({ ...prev, phone: e.target.value }))}
-                                                        placeholder="(11) 99999-9999"
-                                                    />
-                                                </div>
                                             </div>
 
                                             <div>
                                                 <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                    Senha Temporária *
+                                                    Telefone
                                                 </label>
                                                 <input
-                                                    type="password"
+                                                    type="tel"
                                                     className="input"
-                                                    value={newConsultantForm.password}
-                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, password: e.target.value }))}
-                                                    placeholder="Mínimo 6 caracteres"
+                                                    value={newConsultantForm.phone}
+                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, phone: e.target.value }))}
+                                                    placeholder="(11) 99999-9999"
                                                 />
                                             </div>
+                                        </div>
 
-                                            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                                                <div className="flex">
-                                                    <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2 mt-0.5" />
-                                                    <div>
-                                                        <h4 className="text-sm font-medium text-green-900">O que acontecerá:</h4>
-                                                        <ul className="text-sm text-green-700 mt-1 space-y-1">
-                                                            <li>• Novo consultor será criado no sistema</li>
-                                                            <li>• Será automaticamente adicionado à sua equipe</li>
-                                                            <li>• Será vinculado ao seu estabelecimento</li>
-                                                            <li>• Receberá email com credenciais de acesso</li>
-                                                        </ul>
-                                                    </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                Senha Temporária *
+                                            </label>
+                                            <input
+                                                type="password"
+                                                className="input"
+                                                value={newConsultantForm.password}
+                                                onChange={(e) => setNewConsultantForm(prev => ({ ...prev, password: e.target.value }))}
+                                                placeholder="Mínimo 6 caracteres"
+                                            />
+                                        </div>
+
+                                        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                                            <div className="flex">
+                                                <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2 mt-0.5" />
+                                                <div>
+                                                    <h4 className="text-sm font-medium text-green-900">O que acontecerá:</h4>
+                                                    <ul className="text-sm text-green-700 mt-1 space-y-1">
+                                                        <li>• Novo consultor será criado no sistema</li>
+                                                        <li>• Será automaticamente adicionado à sua equipe</li>
+                                                        <li>• Será vinculado ao seu estabelecimento</li>
+                                                        <li>• Receberá email com credenciais de acesso</li>
+                                                    </ul>
                                                 </div>
                                             </div>
                                         </div>
-                                    )}
-
-                                    {/* ADICIONAR CONSULTOR EXISTENTE */}
-                                    {modalType === 'add_existing' && (
-                                        <div className="space-y-4">
-                                            {availableConsultants.length > 0 ? (
-                                                <>
-                                                    <div>
-                                                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                            Selecione um consultor existente
-                                                        </label>
-                                                        <select
-                                                            className="input"
-                                                            value={selectedConsultantId}
-                                                            onChange={(e) => setSelectedConsultantId(e.target.value)}
-                                                        >
-                                                            <option value="">Escolha um consultor...</option>
-                                                            {availableConsultants.map(consultant => (
-                                                                <option key={consultant.id} value={consultant.id}>
-                                                                    {consultant.full_name} ({consultant.email})
-                                                                    {consultant.current_manager && ` - Gerente: ${consultant.current_manager}`}
-                                                                </option>
-                                                            ))}
-                                                        </select>
-                                                    </div>
-
-                                                    {selectedConsultantId && (
-                                                        <div className="bg-secondary-50 rounded-lg p-3">
-                                                            {(() => {
-                                                                const selected = availableConsultants.find(c => c.id === selectedConsultantId)
-                                                                if (!selected) return null
-                                                                return (
-                                                                    <div>
-                                                                        <h4 className="text-sm font-medium text-secondary-900">
-                                                                            {selected.full_name}
-                                                                        </h4>
-                                                                        <p className="text-xs text-secondary-600">
-                                                                            Estabelecimentos: {selected.establishment_names.join(', ')}
-                                                                        </p>
-                                                                        {selected.current_manager && (
-                                                                            <p className="text-xs text-warning-600 mt-1">
-                                                                                ⚠️ Já tem gerente: {selected.current_manager}
-                                                                            </p>
-                                                                        )}
-                                                                    </div>
-                                                                )
-                                                            })()}
-                                                        </div>
-                                                    )}
-
-                                                    <div className="bg-warning-50 border border-warning-200 rounded-lg p-3">
-                                                        <p className="text-sm text-warning-700">
-                                                            <strong>Nota:</strong> Apenas consultores do seu estabelecimento que não estão em outras equipes aparecem aqui.
-                                                        </p>
-                                                    </div>
-                                                </>
-                                            ) : (
-                                                <div className="text-center py-6">
-                                                    <UsersIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
-                                                    <h4 className="text-sm font-medium text-secondary-900 mb-2">
-                                                        Nenhum consultor disponível
-                                                    </h4>
-                                                    <div className="text-sm text-secondary-500 space-y-2">
-                                                        <p>Possíveis motivos:</p>
-                                                        <ul className="text-xs list-disc list-inside space-y-1 text-left">
-                                                            <li>Todos os consultores do seu estabelecimento já estão na sua equipe</li>
-                                                            <li>Não há consultores ativos no seu estabelecimento</li>
-                                                            <li>Consultores estão em outras equipes</li>
-                                                        </ul>
-                                                        <p className="text-primary-600 font-medium">
-                                                            💡 Dica: Use a opção &quote;Criar Novo&quote; para adicionar um consultor à sua equipe!
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+                                    </div>
 
                                     <div className="mt-6 flex justify-end space-x-3">
                                         <button
@@ -1314,7 +1121,6 @@ export default function TeamPage() {
                                             className="btn btn-secondary"
                                             onClick={() => {
                                                 setIsAddModalOpen(false)
-                                                setSelectedConsultantId('')
                                                 setNewConsultantForm({
                                                     full_name: '',
                                                     email: '',
@@ -1326,55 +1132,30 @@ export default function TeamPage() {
                                             Cancelar
                                         </button>
 
-                                        {/* Botão para Criar Novo */}
-                                        {modalType === 'create_new' && (
-                                            <button
-                                                type="button"
-                                                className="btn btn-primary"
-                                                onClick={handleCreateNewConsultant}
-                                                disabled={
-                                                    submitting ||
-                                                    !newConsultantForm.full_name ||
-                                                    !newConsultantForm.email ||
-                                                    !newConsultantForm.password ||
-                                                    managerEstablishments.length === 0
-                                                }
-                                            >
-                                                {submitting ? (
-                                                    <>
-                                                        <div className="loading-spinner w-4 h-4 mr-2"></div>
-                                                        Criando...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <UserPlusIcon className="h-4 w-4 mr-2" />
-                                                        Criar e Adicionar à Equipe
-                                                    </>
-                                                )}
-                                            </button>
-                                        )}
-
-                                        {/* Botão para Adicionar Existente */}
-                                        {modalType === 'add_existing' && availableConsultants.length > 0 && (
-                                            <button
-                                                type="button"
-                                                className="btn btn-primary"
-                                                onClick={handleAddConsultantToTeam}
-                                                disabled={submitting || !selectedConsultantId}
-                                            >
-                                                {submitting ? (
-                                                    <>
-                                                        <div className="loading-spinner w-4 h-4 mr-2"></div>
-                                                        Adicionando...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <UsersIcon className="h-4 w-4 mr-2" />
-                                                        Adicionar à Minha Equipe
-                                                    </>
-                                                )}
-                                            </button>
-                                        )}
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={handleCreateNewConsultant}
+                                            disabled={
+                                                submitting ||
+                                                !newConsultantForm.full_name ||
+                                                !newConsultantForm.email ||
+                                                !newConsultantForm.password ||
+                                                managerEstablishments.length === 0
+                                            }
+                                        >
+                                            {submitting ? (
+                                                <>
+                                                    <div className="loading-spinner w-4 h-4 mr-2"></div>
+                                                    Criando...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <UserPlusIcon className="h-4 w-4 mr-2" />
+                                                    Criar e Adicionar à Equipe
+                                                </>
+                                            )}
+                                        </button>
                                     </div>
                                 </Dialog.Panel>
                             </Transition.Child>
