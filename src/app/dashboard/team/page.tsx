@@ -274,7 +274,7 @@ export default function TeamPage() {
         }
     }
 
-   // CORRIGIDO: Buscar apenas consultores dos estabelecimentos do gerente
+    // CORRIGIDO: Buscar apenas consultores dos estabelecimentos do gerente (permite primeiro consultor)
     const fetchAvailableConsultants = async () => {
         try {
             if (managerEstablishments.length === 0) {
@@ -301,7 +301,7 @@ export default function TeamPage() {
                 return
             }
 
-            // 2. Buscar consultores vinculados APENAS aos estabelecimentos do gerente
+            // 2. CORREÇÃO: Query com join correto
             const { data: consultantsInEstablishments, error: consultantsError } = await supabase
                 .from('user_establishments')
                 .select(`
@@ -314,7 +314,7 @@ export default function TeamPage() {
                     role,
                     status
                 ),
-                establishment_codes!inner (
+                establishment_codes!user_establishments_establishment_code_fkey (
                     name
                 )
             `)
@@ -335,56 +335,57 @@ export default function TeamPage() {
 
             const currentTeamIds = currentTeamData?.map(h => h.consultant_id) || []
 
-            // 4. Filtrar apenas consultores dos estabelecimentos do gerente que não estão na equipe
+            // 4. Processar todos os consultores dos estabelecimentos do gerente
             const consultantsMap = new Map()
 
             consultantsInEstablishments?.forEach(item => {
-                if (!currentTeamIds.includes(item.user_id)) {
-                    const userId = item.user_id
+                const userId = item.user_id
 
-                    // Verificar se users é array ou objeto
-                    const userData = Array.isArray(item.users) ? item.users[0] : item.users
-                    if (!userData) return
+                // Verificar se users é array ou objeto
+                const userData = Array.isArray(item.users) ? item.users[0] : item.users
+                if (!userData) return
 
-                    // Verificar se establishment_codes é array ou objeto
-                    const establishmentData = Array.isArray(item.establishment_codes) 
-                        ? item.establishment_codes[0] 
-                        : item.establishment_codes
-                    const establishmentName = establishmentData?.name || 'Estabelecimento não identificado'
+                // CORREÇÃO: Acessar establishment_codes corretamente
+                const establishmentData = Array.isArray(item.establishment_codes)
+                    ? item.establishment_codes[0]
+                    : item.establishment_codes
+                const establishmentName = establishmentData?.name || 'Estabelecimento não identificado'
 
-                    // IMPORTANTE: Só incluir se o estabelecimento está na lista do gerente
-                    if (!managerEstablishments.includes(establishmentName)) {
-                        return // Pular este consultor se não for do estabelecimento do gerente
-                    }
+                // IMPORTANTE: Só incluir se o estabelecimento está na lista do gerente
+                if (!managerEstablishments.includes(establishmentName)) {
+                    return // Pular este consultor se não for do estabelecimento do gerente
+                }
 
-                    if (!consultantsMap.has(userId)) {
-                        consultantsMap.set(userId, {
-                            id: userId,
-                            full_name: userData.full_name,
-                            email: userData.email,
-                            establishment_names: []
-                        })
-                    }
+                if (!consultantsMap.has(userId)) {
+                    consultantsMap.set(userId, {
+                        id: userId,
+                        full_name: userData.full_name,
+                        email: userData.email,
+                        establishment_names: [],
+                        isInCurrentTeam: currentTeamIds.includes(userId) // Marcar se já está na equipe
+                    })
+                }
 
-                    const consultant = consultantsMap.get(userId)
-                    if (!consultant.establishment_names.includes(establishmentName)) {
-                        consultant.establishment_names.push(establishmentName)
-                    }
+                const consultant = consultantsMap.get(userId)
+                if (!consultant.establishment_names.includes(establishmentName)) {
+                    consultant.establishment_names.push(establishmentName)
                 }
             })
 
-            // 5. Verificar se consultores têm outro gerente
-            const availableConsultantsList = Array.from(consultantsMap.values())
+            // 5. Separar consultores disponíveis (não estão na equipe atual)
+            const allConsultants = Array.from(consultantsMap.values())
+            const availableConsultantsList = allConsultants.filter(c => !c.isInCurrentTeam)
 
+            // 6. Verificar se consultores disponíveis têm outro gerente
             if (availableConsultantsList.length > 0) {
                 const { data: otherManagers, error: managersError } = await supabase
                     .from('hierarchies')
                     .select(`
-                    consultant_id,
-                    users!hierarchies_manager_id_fkey (
-                        full_name
-                    )
-                `)
+                consultant_id,
+                users!hierarchies_manager_id_fkey (
+                    full_name
+                )
+            `)
                     .in('consultant_id', availableConsultantsList.map(c => c.id))
                     .neq('manager_id', profile?.id)
 
@@ -400,7 +401,9 @@ export default function TeamPage() {
             }
 
             setAvailableConsultants(availableConsultantsList)
-            console.log('✅ Consultores disponíveis dos estabelecimentos do gerente:', availableConsultantsList.length)
+            console.log('✅ Total consultores nos estabelecimentos do gerente:', allConsultants.length)
+            console.log('✅ Consultores disponíveis (não na equipe):', availableConsultantsList.length)
+            console.log('✅ Consultores já na equipe:', allConsultants.filter(c => c.isInCurrentTeam).length)
 
         } catch (error: any) {
             console.error('❌ Erro ao buscar consultores disponíveis:', error)
