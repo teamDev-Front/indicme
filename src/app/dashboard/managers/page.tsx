@@ -273,81 +273,268 @@ export default function ManagersPage() {
     try {
       setSubmitting(true)
 
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
+      // 1. PRIMEIRO buscar a clínica com validação robusta
+      let clinicId: string | null = null
 
-      if (!userClinic) throw new Error('Clínica não encontrada')
+      // Tentar múltiplas estratégias para encontrar a clínica
+      try {
+        console.log('🔍 Buscando clínica para o usuário:', profile?.id)
+
+        // Estratégia 1: Buscar via user_clinics
+        const { data: userClinic, error: userClinicError } = await supabase
+          .from('user_clinics')
+          .select('clinic_id, clinics!inner(id, name, status)')
+          .eq('user_id', profile?.id)
+          .eq('clinics.status', 'active')
+          .maybeSingle()
+
+        if (userClinic?.clinic_id) {
+          clinicId = userClinic.clinic_id
+          console.log('✅ Clínica encontrada via user_clinics:', clinicId)
+        } else {
+          console.log('⚠️ user_clinics vazio, tentando buscar todas as clínicas...')
+
+          // Estratégia 2: Se for admin, buscar primeira clínica ativa
+          if (profile?.role === 'clinic_admin') {
+            const { data: availableClinics, error: clinicsError } = await supabase
+              .from('clinics')
+              .select('id, name')
+              .eq('status', 'active')
+              .limit(1)
+
+            if (clinicsError) {
+              console.error('Erro ao buscar clínicas:', clinicsError)
+              throw new Error('Erro ao buscar clínicas disponíveis')
+            }
+
+            if (availableClinics && availableClinics.length > 0) {
+              clinicId = availableClinics[0].id
+              console.log('✅ Clínica encontrada para admin:', availableClinics[0].name)
+
+              // Associar admin à clínica automaticamente
+              const { error: autoAssocError } = await supabase
+                .from('user_clinics')
+                .upsert({
+                  user_id: profile.id,
+                  clinic_id: clinicId
+                }, {
+                  onConflict: 'user_id,clinic_id',
+                  ignoreDuplicates: true
+                })
+
+              if (autoAssocError) {
+                console.warn('Aviso ao associar admin:', autoAssocError)
+              } else {
+                console.log('✅ Admin associado automaticamente à clínica')
+              }
+            }
+          }
+        }
+      } catch (clinicSearchError) {
+        console.error('Erro na busca de clínica:', clinicSearchError)
+      }
+
+      // Se ainda não encontrou clínica, criar uma
+      if (!clinicId && profile?.role === 'clinic_admin') {
+        console.log('⚠️ Criando clínica padrão para admin...')
+
+        const { data: newClinic, error: createClinicError } = await supabase
+          .from('clinics')
+          .insert({
+            name: 'Clínica Principal',
+            status: 'active'
+          })
+          .select('id, name')
+          .single()
+
+        if (createClinicError) {
+          console.error('Erro ao criar clínica:', createClinicError)
+          throw new Error('Não foi possível criar clínica padrão')
+        }
+
+        clinicId = newClinic.id
+
+        // Associar admin à nova clínica
+        await supabase
+          .from('user_clinics')
+          .insert({
+            user_id: profile.id,
+            clinic_id: clinicId
+          })
+
+        console.log('✅ Clínica criada e admin associado:', newClinic.name)
+      }
+
+      if (!clinicId) {
+        throw new Error('Clínica não encontrada e não foi possível criar uma')
+      }
+
+      console.log('✅ Clínica confirmada:', clinicId)
 
       if (modalMode === 'create') {
-        // Criar usuário
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        console.log('🚀 Iniciando criação de gerente...')
+
+        // 2. Criar usuário no auth com dados corretos
+        const authPayload = {
           email: formData.email,
           password: formData.password,
           options: {
-            data: { full_name: formData.full_name }
+            data: {
+              full_name: formData.full_name,
+              role: 'manager'
+            }
           }
-        })
+        }
 
-        if (signUpError) throw signUpError
+        console.log('📧 Criando usuário no auth:', { email: formData.email, name: formData.full_name })
 
-        if (signUpData.user) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp(authPayload)
 
-          // Criar perfil
-          const { error: profileError } = await supabase
-            .from('users')
-            .upsert({
-              id: signUpData.user.id,
+        if (signUpError) {
+          console.error('❌ Erro no auth.signUp:', signUpError)
+          throw signUpError
+        }
+
+        if (!signUpData.user) {
+          throw new Error('Usuário não foi criado no auth')
+        }
+
+        const newUserId = signUpData.user.id
+        console.log('✅ Usuário criado no auth:', newUserId)
+
+        // 3. Aguardar propagação
+        console.log('⏳ Aguardando propagação...')
+        await new Promise(resolve => setTimeout(resolve, 2000))
+
+        // 4. Criar perfil com retry
+        let profileCreated = false
+        let retries = 3
+
+        while (!profileCreated && retries > 0) {
+          try {
+            console.log(`📝 Tentativa ${4 - retries} de criar perfil...`)
+
+            const profileData = {
+              id: newUserId,
               email: formData.email,
               full_name: formData.full_name,
               phone: formData.phone || null,
-              role: 'manager',
-              status: 'active',
-            })
+              role: 'manager' as const,
+              status: 'active' as const,
+            }
 
-          if (profileError) throw profileError
+            const { error: profileError } = await supabase
+              .from('users')
+              .upsert(profileData, {
+                onConflict: 'id'
+              })
 
-          // Associar à clínica
-          const { error: clinicError } = await supabase
-            .from('user_clinics')
-            .insert({
-              user_id: signUpData.user.id,
-              clinic_id: userClinic.clinic_id,
-            })
+            if (profileError) {
+              console.warn(`❌ Erro na criação do perfil (tentativa ${4 - retries}):`, profileError)
+              retries--
+              if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 1500))
+                continue
+              }
+              throw profileError
+            }
 
-          if (clinicError) throw clinicError
+            profileCreated = true
+            console.log('✅ Perfil criado com sucesso')
+          } catch (error) {
+            retries--
+            if (retries === 0) {
+              console.error('❌ Falha final na criação do perfil:', error)
+              throw error
+            }
+            await new Promise(resolve => setTimeout(resolve, 1500))
+          }
+        }
 
-          // Vincular estabelecimento se informado
-          if (formData.establishment_name) {
-            // Buscar código do estabelecimento
-            const { data: establishments } = await supabase
+        // 5. Associar à clínica com retry
+        let clinicAssociated = false
+        retries = 3
+
+        while (!clinicAssociated && retries > 0) {
+          try {
+            console.log(`🏥 Tentativa ${4 - retries} de associar à clínica...`)
+
+            const { error: clinicError } = await supabase
+              .from('user_clinics')
+              .upsert({
+                user_id: newUserId,
+                clinic_id: clinicId,
+              }, {
+                onConflict: 'user_id,clinic_id'
+              })
+
+            if (clinicError) {
+              console.warn(`❌ Erro na associação à clínica (tentativa ${4 - retries}):`, clinicError)
+              retries--
+              if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                continue
+              }
+              throw clinicError
+            }
+
+            clinicAssociated = true
+            console.log('✅ Usuário associado à clínica')
+          } catch (error) {
+            retries--
+            if (retries === 0) {
+              console.error('❌ Falha final na associação à clínica:', error)
+              throw error
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          }
+        }
+
+        // 6. Vincular estabelecimento se informado
+        if (formData.establishment_name) {
+          try {
+            console.log('🏢 Vinculando estabelecimento:', formData.establishment_name)
+
+            const { data: establishments, error: estError } = await supabase
               .from('establishment_codes')
               .select('code')
               .eq('name', formData.establishment_name)
               .eq('is_active', true)
               .limit(1)
 
-            if (establishments && establishments.length > 0) {
-              await supabase
+            if (estError) {
+              console.warn('❌ Erro ao buscar estabelecimento:', estError)
+            } else if (establishments && establishments.length > 0) {
+              const { error: userEstError } = await supabase
                 .from('user_establishments')
-                .insert({
-                  user_id: signUpData.user.id,
+                .upsert({
+                  user_id: newUserId,
                   establishment_code: establishments[0].code,
                   status: 'active',
                   added_by: profile?.id
+                }, {
+                  onConflict: 'user_id,establishment_code'
                 })
-            }
-          }
 
-          toast.success('Gerente criado com sucesso!')
+              if (userEstError) {
+                console.warn('❌ Erro ao vincular estabelecimento (não crítico):', userEstError)
+              } else {
+                console.log('✅ Estabelecimento vinculado')
+              }
+            }
+          } catch (estError) {
+            console.warn('❌ Erro geral no estabelecimento (não crítico):', estError)
+          }
         }
 
+        console.log('🎉 Gerente criado com sucesso!')
+        toast.success('Gerente criado com sucesso!')
+
       } else {
-        // Editar
+        // EDIÇÃO
         if (!selectedManager) return
+
+        console.log('📝 Atualizando gerente:', selectedManager.id)
 
         const { error } = await supabase
           .from('users')
@@ -362,7 +549,7 @@ export default function ManagersPage() {
 
         // Atualizar estabelecimento se mudou
         if (formData.establishment_name && formData.establishment_name !== selectedManager.establishment_name) {
-          // Primeiro, desativar estabelecimentos atuais
+          // Desativar estabelecimentos atuais
           await supabase
             .from('user_establishments')
             .update({ status: 'inactive' })
@@ -393,16 +580,30 @@ export default function ManagersPage() {
 
       setIsModalOpen(false)
       setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
+
+      // Aguardar um pouco antes de recarregar para garantir propagação
       setTimeout(() => fetchManagers(), 1000)
 
     } catch (error: any) {
-      console.error('Erro ao salvar gerente:', error)
-      toast.error(error.message || 'Erro ao salvar gerente')
+      console.error('❌ Erro completo ao salvar gerente:', error)
+
+      // Mensagens de erro mais específicas
+      if (error.message.includes('User already registered')) {
+        toast.error('Este email já está cadastrado no sistema')
+      } else if (error.message.includes('Invalid login credentials')) {
+        toast.error('Credenciais inválidas')
+      } else if (error.message.includes('Clínica não encontrada')) {
+        toast.error('Erro: Clínica não encontrada. Contate o suporte.')
+      } else if (error.message.includes('Email not confirmed')) {
+        toast.error('Email precisa ser confirmado')
+      } else {
+        toast.error(`Erro ao salvar gerente: ${error.message}`)
+      }
     } finally {
       setSubmitting(false)
     }
   }
-
+  
   const handleStatusChange = async (managerId: string, newStatus: string) => {
     try {
       const { error } = await supabase
@@ -818,8 +1019,8 @@ export default function ManagersPage() {
                           value={manager.status}
                           onChange={(e) => handleStatusChange(manager.id, e.target.value)}
                           className={`badge cursor-pointer hover:opacity-80 border-0 text-xs ${manager.status === 'active' ? 'badge-success' :
-                              manager.status === 'inactive' ? 'badge-danger' :
-                                'badge-warning'
+                            manager.status === 'inactive' ? 'badge-danger' :
+                              'badge-warning'
                             }`}
                         >
                           <option value="active">Ativo</option>
@@ -828,8 +1029,8 @@ export default function ManagersPage() {
                         </select>
                       ) : (
                         <span className={`badge ${manager.status === 'active' ? 'badge-success' :
-                            manager.status === 'inactive' ? 'badge-danger' :
-                              'badge-warning'
+                          manager.status === 'inactive' ? 'badge-danger' :
+                            'badge-warning'
                           }`}>
                           {manager.status === 'active' ? 'Ativo' :
                             manager.status === 'inactive' ? 'Inativo' :
