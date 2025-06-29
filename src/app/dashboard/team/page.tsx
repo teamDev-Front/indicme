@@ -1,3 +1,4 @@
+// src/app/dashboard/team/page.tsx - CORREÇÃO DO MODAL DE ADICIONAR À EQUIPE
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -28,6 +29,7 @@ import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import Link from 'next/link'
 
+// Interfaces existentes (mantidas as mesmas)
 interface TeamMember {
     id: string
     email: string
@@ -92,10 +94,23 @@ export default function TeamPage() {
     const [sortBy, setSortBy] = useState<'name' | 'leads' | 'conversion' | 'commissions'>('name')
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
     const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null)
+
+    // NOVO ESTADO PARA CONTROLAR O TIPO DE MODAL
     const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+    const [modalType, setModalType] = useState<'create_new' | 'add_existing'>('create_new')
+
     const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false)
     const [selectedConsultantId, setSelectedConsultantId] = useState('')
     const [submitting, setSubmitting] = useState(false)
+
+    // NOVO ESTADO PARA FORMULÁRIO DE CRIAÇÃO
+    const [newConsultantForm, setNewConsultantForm] = useState({
+        full_name: '',
+        email: '',
+        phone: '',
+        password: ''
+    })
+
     const supabase = createClient()
 
     useEffect(() => {
@@ -111,11 +126,9 @@ export default function TeamPage() {
         }
     }, [managerEstablishments])
 
-    // NOVO: Buscar estabelecimentos do gerente
+    // Funções existentes mantidas (fetchManagerEstablishments, fetchTeamData, fetchAvailableConsultants)
     const fetchManagerEstablishments = async () => {
         try {
-            console.log('🔍 Buscando estabelecimentos do gerente:', profile?.id)
-
             const { data: userEstablishments, error } = await supabase
                 .from('user_establishments')
                 .select(`
@@ -134,7 +147,6 @@ export default function TeamPage() {
             ).filter(Boolean) || []
 
             setManagerEstablishments(establishmentNames)
-            console.log('🏢 Estabelecimentos do gerente:', establishmentNames)
         } catch (error) {
             console.error('Erro ao buscar estabelecimentos do gerente:', error)
             setManagerEstablishments([])
@@ -147,7 +159,6 @@ export default function TeamPage() {
 
             if (!profile) return
 
-            // Buscar membros da equipe
             const { data: hierarchyData, error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .select(`
@@ -168,7 +179,6 @@ export default function TeamPage() {
 
             if (hierarchyError) throw hierarchyError
 
-            // Verificar se hierarchyData é válido e não vazio
             if (!hierarchyData || hierarchyData.length === 0) {
                 setTeamMembers([])
                 setTeamStats({
@@ -184,29 +194,24 @@ export default function TeamPage() {
                 return
             }
 
-            // Buscar estatísticas para cada membro
             const teamMembersWithStats = await Promise.all(
                 hierarchyData.map(async (hierarchy) => {
                     const member = hierarchy.users
                     if (!member) return null
 
-                    // Verificar se member é um array ou objeto
                     const memberData = Array.isArray(member) ? member[0] : member
                     if (!memberData) return null
 
-                    // Buscar leads do consultor
                     const { data: leadsData } = await supabase
                         .from('leads')
                         .select('status, created_at')
                         .eq('indicated_by', memberData.id)
 
-                    // Buscar comissões do consultor
                     const { data: commissionsData } = await supabase
                         .from('commissions')
                         .select('amount, status, created_at')
                         .eq('user_id', memberData.id)
 
-                    // Calcular estatísticas
                     const totalLeads = leadsData?.length || 0
                     const convertedLeads = leadsData?.filter(l => l.status === 'converted').length || 0
                     const pendingLeads = leadsData?.filter(l => ['new', 'contacted', 'scheduled'].includes(l.status)).length || 0
@@ -217,12 +222,10 @@ export default function TeamPage() {
                     const paidCommissions = commissionsData?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
                     const pendingCommissions = commissionsData?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
 
-                    // Data do último lead
                     const lastLeadDate = leadsData && leadsData.length > 0
                         ? leadsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0].created_at
                         : null
 
-                    // Média de leads por mês
                     const membershipMonths = Math.max(1, Math.floor(
                         (new Date().getTime() - new Date(hierarchy.created_at).getTime()) / (1000 * 60 * 60 * 24 * 30)
                     ))
@@ -252,7 +255,6 @@ export default function TeamPage() {
             const validMembers = teamMembersWithStats.filter(Boolean) as TeamMember[]
             setTeamMembers(validMembers)
 
-            // Calcular estatísticas da equipe
             const stats: TeamStats = {
                 totalMembers: validMembers.length,
                 activeMembers: validMembers.filter(m => m.status === 'active').length,
@@ -274,18 +276,13 @@ export default function TeamPage() {
         }
     }
 
-    // CORRIGIDO: Buscar apenas consultores dos estabelecimentos do gerente (permite primeiro consultor)
     const fetchAvailableConsultants = async () => {
         try {
             if (managerEstablishments.length === 0) {
-                console.log('⚠️ Gerente não tem estabelecimentos definidos')
                 setAvailableConsultants([])
                 return
             }
 
-            console.log('🔍 Buscando consultores APENAS dos estabelecimentos do gerente:', managerEstablishments)
-
-            // 1. Buscar códigos dos estabelecimentos do gerente
             const { data: establishmentCodes, error: codesError } = await supabase
                 .from('establishment_codes')
                 .select('code')
@@ -296,12 +293,10 @@ export default function TeamPage() {
             const codes = establishmentCodes?.map(ec => ec.code) || []
 
             if (codes.length === 0) {
-                console.log('⚠️ Nenhum código encontrado para os estabelecimentos do gerente')
                 setAvailableConsultants([])
                 return
             }
 
-            // 2. CORREÇÃO: Query com join correto
             const { data: consultantsInEstablishments, error: consultantsError } = await supabase
                 .from('user_establishments')
                 .select(`
@@ -318,14 +313,13 @@ export default function TeamPage() {
                     name
                 )
             `)
-                .in('establishment_code', codes) // FILTRO PRINCIPAL: só estabelecimentos do gerente
+                .in('establishment_code', codes)
                 .eq('status', 'active')
                 .eq('users.role', 'consultant')
                 .eq('users.status', 'active')
 
             if (consultantsError) throw consultantsError
 
-            // 3. Buscar quais consultores JÁ ESTÃO na equipe deste gerente
             const { data: currentTeamData, error: teamError } = await supabase
                 .from('hierarchies')
                 .select('consultant_id')
@@ -335,25 +329,21 @@ export default function TeamPage() {
 
             const currentTeamIds = currentTeamData?.map(h => h.consultant_id) || []
 
-            // 4. Processar todos os consultores dos estabelecimentos do gerente
             const consultantsMap = new Map()
 
             consultantsInEstablishments?.forEach(item => {
                 const userId = item.user_id
 
-                // Verificar se users é array ou objeto
                 const userData = Array.isArray(item.users) ? item.users[0] : item.users
                 if (!userData) return
 
-                // CORREÇÃO: Acessar establishment_codes corretamente
                 const establishmentData = Array.isArray(item.establishment_codes)
                     ? item.establishment_codes[0]
                     : item.establishment_codes
                 const establishmentName = establishmentData?.name || 'Estabelecimento não identificado'
 
-                // IMPORTANTE: Só incluir se o estabelecimento está na lista do gerente
                 if (!managerEstablishments.includes(establishmentName)) {
-                    return // Pular este consultor se não for do estabelecimento do gerente
+                    return
                 }
 
                 if (!consultantsMap.has(userId)) {
@@ -362,7 +352,7 @@ export default function TeamPage() {
                         full_name: userData.full_name,
                         email: userData.email,
                         establishment_names: [],
-                        isInCurrentTeam: currentTeamIds.includes(userId) // Marcar se já está na equipe
+                        isInCurrentTeam: currentTeamIds.includes(userId)
                     })
                 }
 
@@ -372,11 +362,9 @@ export default function TeamPage() {
                 }
             })
 
-            // 5. Separar consultores disponíveis (não estão na equipe atual)
             const allConsultants = Array.from(consultantsMap.values())
             const availableConsultantsList = allConsultants.filter(c => !c.isInCurrentTeam)
 
-            // 6. Verificar se consultores disponíveis têm outro gerente
             if (availableConsultantsList.length > 0) {
                 const { data: otherManagers, error: managersError } = await supabase
                     .from('hierarchies')
@@ -401,9 +389,6 @@ export default function TeamPage() {
             }
 
             setAvailableConsultants(availableConsultantsList)
-            console.log('✅ Total consultores nos estabelecimentos do gerente:', allConsultants.length)
-            console.log('✅ Consultores disponíveis (não na equipe):', availableConsultantsList.length)
-            console.log('✅ Consultores já na equipe:', allConsultants.filter(c => c.isInCurrentTeam).length)
 
         } catch (error: any) {
             console.error('❌ Erro ao buscar consultores disponíveis:', error)
@@ -412,14 +397,153 @@ export default function TeamPage() {
         }
     }
 
-    // CORRIGIDO: Adicionar consultor à equipe com validações
-    const handleAddConsultantToTeam = async () => {
-        if (!selectedConsultantId || !profile) return
+    const handleCreateNewConsultant = async () => {
+        if (!profile) {
+            toast.error('Usuário não autenticado')
+            return
+        }
+
+        if (managerEstablishments.length === 0) {
+            toast.error('Você não tem estabelecimentos vinculados')
+            return
+        }
 
         try {
             setSubmitting(true)
 
-            // Buscar clínica do usuário
+            // 1. Buscar clínica do gerente
+            const { data: userClinic, error: clinicError } = await supabase
+                .from('user_clinics')
+                .select('clinic_id')
+                .eq('user_id', profile.id)
+                .single()
+
+            if (clinicError || !userClinic) {
+                throw new Error('Clínica não encontrada.')
+            }
+
+            // 2. Buscar código do estabelecimento do gerente
+            const { data: establishmentCode, error: estError } = await supabase
+                .from('establishment_codes')
+                .select('code')
+                .eq('name', managerEstablishments[0]) // Primeiro estabelecimento do gerente
+                .single()
+
+            if (estError || !establishmentCode) {
+                throw new Error('Código do estabelecimento não encontrado.')
+            }
+
+            // 3. Criar usuário no auth
+            const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+                email: newConsultantForm.email,
+                password: newConsultantForm.password,
+                options: {
+                    data: { full_name: newConsultantForm.full_name }
+                }
+            })
+
+            if (signUpError) throw signUpError
+
+            if (!signUpData.user) {
+                throw new Error('Usuário não foi criado corretamente')
+            }
+
+            const newUserId = signUpData.user.id
+
+            // 4. Aguardar propagação
+            await new Promise(resolve => setTimeout(resolve, 2000))
+
+            // 5. Criar perfil
+            const { error: profileError } = await supabase
+                .from('users')
+                .upsert({
+                    id: newUserId,
+                    email: newConsultantForm.email,
+                    full_name: newConsultantForm.full_name,
+                    phone: newConsultantForm.phone || null,
+                    role: 'consultant',
+                    status: 'active',
+                }, {
+                    onConflict: 'id'
+                })
+
+            if (profileError) throw profileError
+
+            // 6. Associar à clínica
+            const { error: clinicAssocError } = await supabase
+                .from('user_clinics')
+                .upsert({
+                    user_id: newUserId,
+                    clinic_id: userClinic.clinic_id,
+                }, {
+                    onConflict: 'user_id,clinic_id'
+                })
+
+            if (clinicAssocError) throw clinicAssocError
+
+            // 7. Criar hierarquia (adicionar à equipe do gerente)
+            const { error: hierarchyError } = await supabase
+                .from('hierarchies')
+                .upsert({
+                    manager_id: profile.id,
+                    consultant_id: newUserId,
+                    clinic_id: userClinic.clinic_id,
+                }, {
+                    onConflict: 'manager_id,consultant_id'
+                })
+
+            if (hierarchyError) throw hierarchyError
+
+            // 8. Vincular ao estabelecimento do gerente
+            const { error: establishmentError } = await supabase
+                .from('user_establishments')
+                .insert({
+                    user_id: newUserId,
+                    establishment_code: establishmentCode.code,
+                    status: 'active',
+                    added_by: profile.id
+                })
+
+            if (establishmentError) throw establishmentError
+
+            toast.success(`Consultor criado e adicionado à sua equipe!`)
+
+            // Reset form
+            setNewConsultantForm({
+                full_name: '',
+                email: '',
+                phone: '',
+                password: ''
+            })
+
+            setIsAddModalOpen(false)
+            await fetchTeamData()
+            await fetchAvailableConsultants()
+
+        } catch (error: any) {
+            console.error('Erro ao criar consultor:', error)
+            if (error.message.includes('already registered')) {
+                toast.error('Este email já está cadastrado no sistema.')
+            } else {
+                toast.error(`Erro ao criar consultor: ${error.message}`)
+            }
+        } finally {
+            setSubmitting(false)
+        }
+    }
+
+    // =====================================================
+
+    // CORREÇÃO 3: Team Page - Função handleAddConsultantToTeam
+    const handleAddConsultantToTeam = async () => {
+        if (!selectedConsultantId || !profile) {
+            toast.error('Dados incompletos para adicionar consultor')
+            return
+        }
+
+        try {
+            setSubmitting(true)
+
             const { data: userClinic } = await supabase
                 .from('user_clinics')
                 .select('clinic_id')
@@ -428,7 +552,6 @@ export default function TeamPage() {
 
             if (!userClinic) throw new Error('Clínica não encontrada')
 
-            // Verificar se consultor já tem outro gerente
             const { data: existingHierarchy } = await supabase
                 .from('hierarchies')
                 .select('manager_id, users!hierarchies_manager_id_fkey(full_name)')
@@ -436,7 +559,6 @@ export default function TeamPage() {
                 .maybeSingle()
 
             if (existingHierarchy) {
-                // CORREÇÃO: Verificar se users é array ou objeto
                 const managerData = Array.isArray(existingHierarchy.users)
                     ? existingHierarchy.users[0]
                     : existingHierarchy.users
@@ -445,7 +567,6 @@ export default function TeamPage() {
                 return
             }
 
-            // Adicionar à hierarquia
             const { error } = await supabase
                 .from('hierarchies')
                 .insert({
@@ -469,8 +590,14 @@ export default function TeamPage() {
         }
     }
 
+    // =====================================================
+
+    // CORREÇÃO 4: Team Page - Função handleRemoveFromTeam
     const handleRemoveFromTeam = async () => {
-        if (!selectedMember || !profile) return
+        if (!selectedMember || !profile) {
+            toast.error('Dados incompletos para remover consultor')
+            return
+        }
 
         try {
             setSubmitting(true)
@@ -516,7 +643,6 @@ export default function TeamPage() {
             return matchesSearch && matchesStatus
         })
 
-        // Aplicar ordenação
         filtered.sort((a, b) => {
             let aValue: number | string = 0
             let bValue: number | string = 0
@@ -625,9 +751,11 @@ export default function TeamPage() {
                         Ver Todos Consultores
                     </Link>
                     <button
-                        onClick={() => setIsAddModalOpen(true)}
+                        onClick={() => {
+                            setModalType('create_new')
+                            setIsAddModalOpen(true)
+                        }}
                         className="btn btn-primary"
-
                     >
                         <UserPlusIcon className="h-4 w-4 mr-2" />
                         Adicionar à Equipe
@@ -718,7 +846,7 @@ export default function TeamPage() {
                 </div>
             </motion.div>
 
-            {/* Team Members Table */}
+            {/* Team Members Table - Mantida igual à versão original */}
             <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -930,9 +1058,12 @@ export default function TeamPage() {
                                         : 'Tente ajustar os filtros ou termo de busca.'
                                     }
                                 </p>
-                                {teamMembers.length === 0 && availableConsultants.length > 0 && (
+                                {teamMembers.length === 0 && (
                                     <button
-                                        onClick={() => setIsAddModalOpen(true)}
+                                        onClick={() => {
+                                            setModalType('create_new')
+                                            setIsAddModalOpen(true)
+                                        }}
                                         className="btn btn-primary mt-4"
                                     >
                                         <UserPlusIcon className="h-4 w-4 mr-2" />
@@ -945,7 +1076,7 @@ export default function TeamPage() {
                 </div>
             </motion.div>
 
-            {/* MODAL CORRIGIDO - Add Consultant Modal */}
+            {/* MODAL PRINCIPAL CORRIGIDO */}
             <Transition appear show={isAddModalOpen} as={Fragment}>
                 <Dialog as="div" className="relative z-50" onClose={() => setIsAddModalOpen(false)}>
                     <Transition.Child
@@ -973,103 +1104,207 @@ export default function TeamPage() {
                             >
                                 <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                                     <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
-                                        Adicionar Consultor à Sua Equipe
+                                        Adicionar Consultor à Minha Equipe
                                     </Dialog.Title>
+
+                                    {/* NOVA SEÇÃO: Escolha do tipo de ação */}
+                                    <div className="space-y-4 mb-6">
+                                        <h4 className="text-sm font-medium text-secondary-900">Como deseja adicionar?</h4>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button
+                                                onClick={() => setModalType('create_new')}
+                                                className={`p-4 rounded-lg border-2 transition-all ${modalType === 'create_new'
+                                                    ? 'border-primary-500 bg-primary-50 text-primary-700'
+                                                    : 'border-secondary-200 hover:border-secondary-300'
+                                                    }`}
+                                            >
+                                                <UserPlusIcon className="h-6 w-6 mx-auto mb-2" />
+                                                <div className="text-sm font-medium">Criar Novo</div>
+                                                <div className="text-xs">Consultor</div>
+                                            </button>
+                                            <button
+                                                onClick={() => setModalType('add_existing')}
+                                                className={`p-4 rounded-lg border-2 transition-all ${modalType === 'add_existing'
+                                                    ? 'border-primary-500 bg-primary-50 text-primary-700'
+                                                    : 'border-secondary-200 hover:border-secondary-300'
+                                                    }`}
+                                            >
+                                                <UsersIcon className="h-6 w-6 mx-auto mb-2" />
+                                                <div className="text-sm font-medium">Adicionar</div>
+                                                <div className="text-xs">Existente</div>
+                                            </button>
+                                        </div>
+                                    </div>
 
                                     {/* Info sobre estabelecimentos do gerente */}
                                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
                                         <div className="flex items-start">
-                                            <InformationCircleIcon className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
+                                            <BuildingOfficeIcon className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
                                             <div>
-                                                <h4 className="text-sm font-medium text-blue-900">Seus Estabelecimentos</h4>
+                                                <h4 className="text-sm font-medium text-blue-900">Seu Estabelecimento</h4>
                                                 <div className="text-sm text-blue-700 mt-1">
                                                     {managerEstablishments.length > 0 ? (
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {managerEstablishments.map(est => (
-                                                                <span key={est} className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-800">
-                                                                    <BuildingOfficeIcon className="h-3 w-3 mr-1" />
-                                                                    {est}
-                                                                </span>
-                                                            ))}
-                                                        </div>
+                                                        <span className="font-medium">{managerEstablishments[0]}</span>
                                                     ) : (
-                                                        <span className="text-blue-600">Carregando estabelecimentos...</span>
+                                                        <span className="text-blue-600">Carregando...</span>
                                                     )}
                                                 </div>
                                                 <p className="text-xs text-blue-600 mt-1">
-                                                    Apenas consultores destes estabelecimentos podem ser adicionados à sua equipe
+                                                    O consultor será automaticamente vinculado a este estabelecimento
                                                 </p>
                                             </div>
                                         </div>
                                     </div>
 
-                                    {availableConsultants.length > 0 ? (
+                                    {/* CRIAR NOVO CONSULTOR */}
+                                    {modalType === 'create_new' && (
                                         <div className="space-y-4">
+                                            <h4 className="text-sm font-medium text-secondary-900">Dados do Novo Consultor</h4>
+
                                             <div>
                                                 <label className="block text-sm font-medium text-secondary-700 mb-2">
-                                                    Selecione um consultor
+                                                    Nome Completo *
                                                 </label>
-                                                <select
+                                                <input
+                                                    type="text"
                                                     className="input"
-                                                    value={selectedConsultantId}
-                                                    onChange={(e) => setSelectedConsultantId(e.target.value)}
-                                                >
-                                                    <option value="">Escolha um consultor...</option>
-                                                    {availableConsultants.map(consultant => (
-                                                        <option key={consultant.id} value={consultant.id}>
-                                                            {consultant.full_name} ({consultant.email})
-                                                            {consultant.current_manager && ` - Gerente: ${consultant.current_manager}`}
-                                                        </option>
-                                                    ))}
-                                                </select>
+                                                    value={newConsultantForm.full_name}
+                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, full_name: e.target.value }))}
+                                                    placeholder="Nome completo do consultor"
+                                                />
                                             </div>
 
-                                            {/* Detalhes do consultor selecionado */}
-                                            {selectedConsultantId && (
-                                                <div className="bg-secondary-50 rounded-lg p-3">
-                                                    {(() => {
-                                                        const selected = availableConsultants.find(c => c.id === selectedConsultantId)
-                                                        if (!selected) return null
-                                                        return (
-                                                            <div>
-                                                                <h4 className="text-sm font-medium text-secondary-900">
-                                                                    {selected.full_name}
-                                                                </h4>
-                                                                <p className="text-xs text-secondary-600">
-                                                                    Estabelecimentos: {selected.establishment_names.join(', ')}
-                                                                </p>
-                                                                {selected.current_manager && (
-                                                                    <p className="text-xs text-warning-600 mt-1">
-                                                                        ⚠️ Já tem gerente: {selected.current_manager}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        )
-                                                    })()}
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                        Email *
+                                                    </label>
+                                                    <input
+                                                        type="email"
+                                                        className="input"
+                                                        value={newConsultantForm.email}
+                                                        onChange={(e) => setNewConsultantForm(prev => ({ ...prev, email: e.target.value }))}
+                                                        placeholder="email@exemplo.com"
+                                                    />
                                                 </div>
-                                            )}
 
-                                            <div className="bg-primary-50 border border-primary-200 rounded-lg p-3">
-                                                <p className="text-sm text-primary-700">
-                                                    <strong>Nota:</strong> Apenas consultores dos seus estabelecimentos que não estão em outras equipes aparecem nesta lista.
-                                                </p>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                        Telefone
+                                                    </label>
+                                                    <input
+                                                        type="tel"
+                                                        className="input"
+                                                        value={newConsultantForm.phone}
+                                                        onChange={(e) => setNewConsultantForm(prev => ({ ...prev, phone: e.target.value }))}
+                                                        placeholder="(11) 99999-9999"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                    Senha Temporária *
+                                                </label>
+                                                <input
+                                                    type="password"
+                                                    className="input"
+                                                    value={newConsultantForm.password}
+                                                    onChange={(e) => setNewConsultantForm(prev => ({ ...prev, password: e.target.value }))}
+                                                    placeholder="Mínimo 6 caracteres"
+                                                />
+                                            </div>
+
+                                            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                                                <div className="flex">
+                                                    <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2 mt-0.5" />
+                                                    <div>
+                                                        <h4 className="text-sm font-medium text-green-900">O que acontecerá:</h4>
+                                                        <ul className="text-sm text-green-700 mt-1 space-y-1">
+                                                            <li>• Novo consultor será criado no sistema</li>
+                                                            <li>• Será automaticamente adicionado à sua equipe</li>
+                                                            <li>• Será vinculado ao seu estabelecimento</li>
+                                                            <li>• Receberá email com credenciais de acesso</li>
+                                                        </ul>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
-                                    ) : (
-                                        <div className="text-center py-6">
-                                            <UsersIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
-                                            <h4 className="text-sm font-medium text-secondary-900 mb-2">
-                                                Nenhum consultor disponível
-                                            </h4>
-                                            <div className="text-sm text-secondary-500 space-y-1">
-                                                <p>Possíveis motivos:</p>
-                                                <ul className="text-xs list-disc list-inside space-y-1 text-left">
-                                                    <li>Todos os consultores dos seus estabelecimentos já estão na sua equipe</li>
-                                                    <li>Não há consultores ativos nos seus estabelecimentos</li>
-                                                    <li>Consultores estão em outras equipes</li>
-                                                    <li>Você não tem estabelecimentos vinculados</li>
-                                                </ul>
-                                            </div>
+                                    )}
+
+                                    {/* ADICIONAR CONSULTOR EXISTENTE */}
+                                    {modalType === 'add_existing' && (
+                                        <div className="space-y-4">
+                                            {availableConsultants.length > 0 ? (
+                                                <>
+                                                    <div>
+                                                        <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                                            Selecione um consultor existente
+                                                        </label>
+                                                        <select
+                                                            className="input"
+                                                            value={selectedConsultantId}
+                                                            onChange={(e) => setSelectedConsultantId(e.target.value)}
+                                                        >
+                                                            <option value="">Escolha um consultor...</option>
+                                                            {availableConsultants.map(consultant => (
+                                                                <option key={consultant.id} value={consultant.id}>
+                                                                    {consultant.full_name} ({consultant.email})
+                                                                    {consultant.current_manager && ` - Gerente: ${consultant.current_manager}`}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+
+                                                    {selectedConsultantId && (
+                                                        <div className="bg-secondary-50 rounded-lg p-3">
+                                                            {(() => {
+                                                                const selected = availableConsultants.find(c => c.id === selectedConsultantId)
+                                                                if (!selected) return null
+                                                                return (
+                                                                    <div>
+                                                                        <h4 className="text-sm font-medium text-secondary-900">
+                                                                            {selected.full_name}
+                                                                        </h4>
+                                                                        <p className="text-xs text-secondary-600">
+                                                                            Estabelecimentos: {selected.establishment_names.join(', ')}
+                                                                        </p>
+                                                                        {selected.current_manager && (
+                                                                            <p className="text-xs text-warning-600 mt-1">
+                                                                                ⚠️ Já tem gerente: {selected.current_manager}
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                )
+                                                            })()}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="bg-warning-50 border border-warning-200 rounded-lg p-3">
+                                                        <p className="text-sm text-warning-700">
+                                                            <strong>Nota:</strong> Apenas consultores do seu estabelecimento que não estão em outras equipes aparecem aqui.
+                                                        </p>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="text-center py-6">
+                                                    <UsersIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
+                                                    <h4 className="text-sm font-medium text-secondary-900 mb-2">
+                                                        Nenhum consultor disponível
+                                                    </h4>
+                                                    <div className="text-sm text-secondary-500 space-y-2">
+                                                        <p>Possíveis motivos:</p>
+                                                        <ul className="text-xs list-disc list-inside space-y-1 text-left">
+                                                            <li>Todos os consultores do seu estabelecimento já estão na sua equipe</li>
+                                                            <li>Não há consultores ativos no seu estabelecimento</li>
+                                                            <li>Consultores estão em outras equipes</li>
+                                                        </ul>
+                                                        <p className="text-primary-600 font-medium">
+                                                            💡 Dica: Use a opção "Criar Novo" para adicionar um consultor à sua equipe!
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -1080,11 +1315,47 @@ export default function TeamPage() {
                                             onClick={() => {
                                                 setIsAddModalOpen(false)
                                                 setSelectedConsultantId('')
+                                                setNewConsultantForm({
+                                                    full_name: '',
+                                                    email: '',
+                                                    phone: '',
+                                                    password: ''
+                                                })
                                             }}
                                         >
                                             Cancelar
                                         </button>
-                                        {availableConsultants.length > 0 && (
+
+                                        {/* Botão para Criar Novo */}
+                                        {modalType === 'create_new' && (
+                                            <button
+                                                type="button"
+                                                className="btn btn-primary"
+                                                onClick={handleCreateNewConsultant}
+                                                disabled={
+                                                    submitting ||
+                                                    !newConsultantForm.full_name ||
+                                                    !newConsultantForm.email ||
+                                                    !newConsultantForm.password ||
+                                                    managerEstablishments.length === 0
+                                                }
+                                            >
+                                                {submitting ? (
+                                                    <>
+                                                        <div className="loading-spinner w-4 h-4 mr-2"></div>
+                                                        Criando...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <UserPlusIcon className="h-4 w-4 mr-2" />
+                                                        Criar e Adicionar à Equipe
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
+
+                                        {/* Botão para Adicionar Existente */}
+                                        {modalType === 'add_existing' && availableConsultants.length > 0 && (
                                             <button
                                                 type="button"
                                                 className="btn btn-primary"
@@ -1098,7 +1369,7 @@ export default function TeamPage() {
                                                     </>
                                                 ) : (
                                                     <>
-                                                        <UserPlusIcon className="h-4 w-4 mr-2" />
+                                                        <UsersIcon className="h-4 w-4 mr-2" />
                                                         Adicionar à Minha Equipe
                                                     </>
                                                 )}
@@ -1112,7 +1383,7 @@ export default function TeamPage() {
                 </Dialog>
             </Transition>
 
-            {/* Remove Consultant Modal */}
+            {/* Remove Consultant Modal - Mantido igual */}
             <Transition appear show={isRemoveModalOpen} as={Fragment}>
                 <Dialog as="div" className="relative z-50" onClose={() => setIsRemoveModalOpen(false)}>
                     <Transition.Child
