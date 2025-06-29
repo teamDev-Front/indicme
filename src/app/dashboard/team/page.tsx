@@ -20,6 +20,8 @@ import {
     XCircleIcon,
     FunnelIcon,
     UserMinusIcon,
+    BuildingOfficeIcon,
+    InformationCircleIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
@@ -66,12 +68,15 @@ interface ConsultantOption {
     id: string
     full_name: string
     email: string
+    establishment_names: string[]
+    current_manager?: string
 }
 
 export default function TeamPage() {
     const { profile } = useAuth()
     const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
     const [availableConsultants, setAvailableConsultants] = useState<ConsultantOption[]>([])
+    const [managerEstablishments, setManagerEstablishments] = useState<string[]>([])
     const [teamStats, setTeamStats] = useState<TeamStats>({
         totalMembers: 0,
         activeMembers: 0,
@@ -95,10 +100,46 @@ export default function TeamPage() {
 
     useEffect(() => {
         if (profile?.role === 'manager') {
+            fetchManagerEstablishments()
             fetchTeamData()
-            fetchAvailableConsultants()
         }
     }, [profile])
+
+    useEffect(() => {
+        if (managerEstablishments.length > 0) {
+            fetchAvailableConsultants()
+        }
+    }, [managerEstablishments])
+
+    // NOVO: Buscar estabelecimentos do gerente
+    const fetchManagerEstablishments = async () => {
+        try {
+            console.log('🔍 Buscando estabelecimentos do gerente:', profile?.id)
+
+            const { data: userEstablishments, error } = await supabase
+                .from('user_establishments')
+                .select(`
+                    establishment_code,
+                    establishment_code (
+                        name
+                    )
+                `)
+                .eq('user_id', profile?.id)
+                .eq('status', 'active')
+
+            if (error) throw error
+
+            const establishmentNames = userEstablishments?.map(ue =>
+                ue.establishment_code?.name || ue.establishment_code
+            ).filter(Boolean) || []
+
+            setManagerEstablishments(establishmentNames)
+            console.log('🏢 Estabelecimentos do gerente:', establishmentNames)
+        } catch (error) {
+            console.error('Erro ao buscar estabelecimentos do gerente:', error)
+            setManagerEstablishments([])
+        }
+    }
 
     const fetchTeamData = async () => {
         try {
@@ -233,47 +274,140 @@ export default function TeamPage() {
         }
     }
 
+    // CORRIGIDO: Buscar consultores dos mesmos estabelecimentos que não estão na equipe
     const fetchAvailableConsultants = async () => {
         try {
-            // Buscar clínica do usuário
-            const { data: userClinic } = await supabase
-                .from('user_clinics')
-                .select('clinic_id')
-                .eq('user_id', profile?.id)
-                .single()
+            if (managerEstablishments.length === 0) {
+                console.log('⚠️ Gerente não tem estabelecimentos definidos')
+                setAvailableConsultants([])
+                return
+            }
 
-            if (!userClinic) return
+            console.log('🔍 Buscando consultores dos estabelecimentos:', managerEstablishments)
 
-            // Buscar consultores que não estão em nenhuma hierarquia
-            const { data: consultantsData, error } = await supabase
-                .from('users')
+            // 1. Buscar códigos dos estabelecimentos do gerente
+            const { data: establishmentCodes, error: codesError } = await supabase
+                .from('establishment_codes')
+                .select('code')
+                .in('name', managerEstablishments)
+
+            if (codesError) throw codesError
+
+            const codes = establishmentCodes?.map(ec => ec.code) || []
+
+            if (codes.length === 0) {
+                console.log('⚠️ Nenhum código encontrado para os estabelecimentos')
+                setAvailableConsultants([])
+                return
+            }
+
+            // 2. Buscar consultores vinculados a esses estabelecimentos
+            const { data: consultantsInEstablishments, error: consultantsError } = await supabase
+                .from('user_establishments')
                 .select(`
+                user_id,
+                establishment_code,
+                users!inner (
                     id,
                     full_name,
                     email,
-                    user_clinics!inner(clinic_id)
-                `)
-                .eq('user_clinics.clinic_id', userClinic.clinic_id)
-                .eq('role', 'consultant')
+                    role,
+                    status
+                ),
+                establishment_code (
+                    name
+                )
+            `)
+                .in('establishment_code', codes)
                 .eq('status', 'active')
+                .eq('users.role', 'consultant')
+                .eq('users.status', 'active')
 
-            if (error) throw error
+            if (consultantsError) throw consultantsError
 
-            // Filtrar consultores que já não estão em alguma hierarquia
-            const { data: existingHierarchies } = await supabase
+            // 3. Buscar quais consultores JÁ ESTÃO na equipe deste gerente
+            const { data: currentTeamData, error: teamError } = await supabase
                 .from('hierarchies')
                 .select('consultant_id')
-                .eq('clinic_id', userClinic.clinic_id)
+                .eq('manager_id', profile?.id)
 
-            const usedConsultantIds = existingHierarchies?.map(h => h.consultant_id) || []
-            const availableConsultants = consultantsData?.filter(c => !usedConsultantIds.includes(c.id)) || []
+            if (teamError) throw teamError
 
-            setAvailableConsultants(availableConsultants)
+            const currentTeamIds = currentTeamData?.map(h => h.consultant_id) || []
+
+            // 4. Agrupar consultores por ID e filtrar os que não estão na equipe
+            const consultantsMap = new Map()
+
+            consultantsInEstablishments?.forEach(item => {
+                if (!currentTeamIds.includes(item.user_id)) {
+                    const userId = item.user_id
+
+                    // CORREÇÃO: Verificar se users é array ou objeto
+                    const userData = Array.isArray(item.users) ? item.users[0] : item.users
+
+                    if (!userData) return // Pular se não houver dados do usuário
+
+                    if (!consultantsMap.has(userId)) {
+                        consultantsMap.set(userId, {
+                            id: userId,
+                            full_name: userData.full_name,
+                            email: userData.email,
+                            establishment_names: []
+                        })
+                    }
+
+                    const consultant = consultantsMap.get(userId)
+                    // CORREÇÃO: Verificar se establishment_code é array ou objeto
+                    const establishmentData = Array.isArray(item.establishment_code)
+                        ? item.establishment_code[0]
+                        : item.establishment_code
+
+                    const establishmentName = establishmentData?.name || item.establishment_code
+
+                    if (!consultant.establishment_names.includes(establishmentName)) {
+                        consultant.establishment_names.push(establishmentName)
+                    }
+                }
+            })
+
+            // 5. Verificar se consultores disponíveis têm outro gerente
+            const availableConsultantsList = Array.from(consultantsMap.values())
+
+            if (availableConsultantsList.length > 0) {
+                const { data: otherManagers, error: managersError } = await supabase
+                    .from('hierarchies')
+                    .select(`
+                    consultant_id,
+                    users!hierarchies_manager_id_fkey (
+                        full_name
+                    )
+                `)
+                    .in('consultant_id', availableConsultantsList.map(c => c.id))
+                    .neq('manager_id', profile?.id)
+
+                if (!managersError && otherManagers) {
+                    otherManagers.forEach(om => {
+                        const consultant = availableConsultantsList.find(c => c.id === om.consultant_id)
+                        if (consultant) {
+                            // CORREÇÃO: Verificar se users é array ou objeto
+                            const managerData = Array.isArray(om.users) ? om.users[0] : om.users
+                            consultant.current_manager = managerData?.full_name || 'Outro gerente'
+                        }
+                    })
+                }
+            }
+
+            setAvailableConsultants(availableConsultantsList)
+            console.log('✅ Consultores disponíveis:', availableConsultantsList.length)
+
         } catch (error: any) {
-            console.error('Erro ao buscar consultores disponíveis:', error)
+            console.error('❌ Erro ao buscar consultores disponíveis:', error)
+            toast.error('Erro ao buscar consultores disponíveis')
+            setAvailableConsultants([])
         }
     }
 
+    // CORRIGIDO: Adicionar consultor à equipe com validações
     const handleAddConsultantToTeam = async () => {
         if (!selectedConsultantId || !profile) return
 
@@ -289,6 +423,23 @@ export default function TeamPage() {
 
             if (!userClinic) throw new Error('Clínica não encontrada')
 
+            // Verificar se consultor já tem outro gerente
+            const { data: existingHierarchy } = await supabase
+                .from('hierarchies')
+                .select('manager_id, users!hierarchies_manager_id_fkey(full_name)')
+                .eq('consultant_id', selectedConsultantId)
+                .maybeSingle()
+
+            if (existingHierarchy) {
+                // CORREÇÃO: Verificar se users é array ou objeto
+                const managerData = Array.isArray(existingHierarchy.users)
+                    ? existingHierarchy.users[0]
+                    : existingHierarchy.users
+                const managerName = managerData?.full_name || 'Outro gerente'
+                toast.error(`Este consultor já está na equipe de: ${managerName}`)
+                return
+            }
+
             // Adicionar à hierarquia
             const { error } = await supabase
                 .from('hierarchies')
@@ -300,7 +451,7 @@ export default function TeamPage() {
 
             if (error) throw error
 
-            toast.success('Consultor adicionado à equipe com sucesso!')
+            toast.success('Consultor adicionado à sua equipe com sucesso!')
             setIsAddModalOpen(false)
             setSelectedConsultantId('')
             await fetchTeamData()
@@ -471,7 +622,7 @@ export default function TeamPage() {
                     <button
                         onClick={() => setIsAddModalOpen(true)}
                         className="btn btn-primary"
-                        
+
                     >
                         <UserPlusIcon className="h-4 w-4 mr-2" />
                         Adicionar à Equipe
@@ -491,134 +642,6 @@ export default function TeamPage() {
                             <div className="flex-shrink-0">
                                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                                     <span className="text-sm font-bold text-primary-600">{teamStats.totalMembers}</span>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Total</p>
-                                <p className="text-xs text-secondary-400">Membros</p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.1 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                                    <span className="text-sm font-bold text-success-600">{teamStats.activeMembers}</span>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Ativos</p>
-                                <p className="text-xs text-secondary-400">Membros</p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.2 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                                    <span className="text-sm font-bold text-primary-600">{teamStats.totalLeads}</span>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Total</p>
-                                <p className="text-xs text-secondary-400">Leads</p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                                    <span className="text-sm font-bold text-success-600">{teamStats.totalConversions}</span>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Conversões</p>
-                                <p className="text-xs text-secondary-400">Total</p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.4 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
-                                    <span className="text-sm font-bold text-warning-600">{teamStats.teamConversionRate.toFixed(1)}%</span>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Taxa</p>
-                                <p className="text-xs text-secondary-400">Conversão</p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.5 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                                    <CurrencyDollarIcon className="w-4 h-4 text-success-600" />
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Pago</p>
-                                <p className="text-xs font-bold text-success-600">
-                                    R$ {teamStats.totalPaidCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.6 }}
-                    className="card"
-                >
-                    <div className="card-body">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                                    <CurrencyDollarIcon className="w-4 h-4 text-primary-600" />
                                 </div>
                             </div>
                             <div className="ml-3">
@@ -844,7 +867,7 @@ export default function TeamPage() {
                                         <td>
                                             <div className="text-center">
                                                 <div className="text-sm text-secondary-900">
-                                                   {formatLastActivity(member._stats?.lastLeadDate ?? null)}
+                                                    {formatLastActivity(member._stats?.lastLeadDate ?? null)}
                                                 </div>
                                                 <div className="text-xs text-secondary-500">
                                                     Último lead
@@ -855,8 +878,8 @@ export default function TeamPage() {
                                             <div className="flex items-center">
                                                 {getStatusIcon(member.status)}
                                                 <span className={`ml-2 badge ${member.status === 'active' ? 'badge-success' :
-                                                        member.status === 'inactive' ? 'badge-danger' :
-                                                            'badge-warning'
+                                                    member.status === 'inactive' ? 'badge-danger' :
+                                                        'badge-warning'
                                                     }`}>
                                                     {member.status === 'active' ? 'Ativo' :
                                                         member.status === 'inactive' ? 'Inativo' :
@@ -917,7 +940,7 @@ export default function TeamPage() {
                 </div>
             </motion.div>
 
-            {/* Add Consultant Modal */}
+            {/* MODAL CORRIGIDO - Add Consultant Modal */}
             <Transition appear show={isAddModalOpen} as={Fragment}>
                 <Dialog as="div" className="relative z-50" onClose={() => setIsAddModalOpen(false)}>
                     <Transition.Child
@@ -943,10 +966,37 @@ export default function TeamPage() {
                                 leaveFrom="opacity-100 scale-100"
                                 leaveTo="opacity-0 scale-95"
                             >
-                                <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
+                                <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                                     <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
-                                        Adicionar Consultor à Equipe
+                                        Adicionar Consultor à Sua Equipe
                                     </Dialog.Title>
+
+                                    {/* Info sobre estabelecimentos do gerente */}
+                                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                                        <div className="flex items-start">
+                                            <InformationCircleIcon className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
+                                            <div>
+                                                <h4 className="text-sm font-medium text-blue-900">Seus Estabelecimentos</h4>
+                                                <div className="text-sm text-blue-700 mt-1">
+                                                    {managerEstablishments.length > 0 ? (
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {managerEstablishments.map(est => (
+                                                                <span key={est} className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-800">
+                                                                    <BuildingOfficeIcon className="h-3 w-3 mr-1" />
+                                                                    {est}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-blue-600">Carregando estabelecimentos...</span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-blue-600 mt-1">
+                                                    Apenas consultores destes estabelecimentos podem ser adicionados à sua equipe
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
 
                                     {availableConsultants.length > 0 ? (
                                         <div className="space-y-4">
@@ -963,14 +1013,40 @@ export default function TeamPage() {
                                                     {availableConsultants.map(consultant => (
                                                         <option key={consultant.id} value={consultant.id}>
                                                             {consultant.full_name} ({consultant.email})
+                                                            {consultant.current_manager && ` - Gerente: ${consultant.current_manager}`}
                                                         </option>
                                                     ))}
                                                 </select>
                                             </div>
 
+                                            {/* Detalhes do consultor selecionado */}
+                                            {selectedConsultantId && (
+                                                <div className="bg-secondary-50 rounded-lg p-3">
+                                                    {(() => {
+                                                        const selected = availableConsultants.find(c => c.id === selectedConsultantId)
+                                                        if (!selected) return null
+                                                        return (
+                                                            <div>
+                                                                <h4 className="text-sm font-medium text-secondary-900">
+                                                                    {selected.full_name}
+                                                                </h4>
+                                                                <p className="text-xs text-secondary-600">
+                                                                    Estabelecimentos: {selected.establishment_names.join(', ')}
+                                                                </p>
+                                                                {selected.current_manager && (
+                                                                    <p className="text-xs text-warning-600 mt-1">
+                                                                        ⚠️ Já tem gerente: {selected.current_manager}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        )
+                                                    })()}
+                                                </div>
+                                            )}
+
                                             <div className="bg-primary-50 border border-primary-200 rounded-lg p-3">
                                                 <p className="text-sm text-primary-700">
-                                                    <strong>Nota:</strong> Apenas consultores que não estão em nenhuma equipe aparecem nesta lista.
+                                                    <strong>Nota:</strong> Apenas consultores dos seus estabelecimentos que não estão em outras equipes aparecem nesta lista.
                                                 </p>
                                             </div>
                                         </div>
@@ -980,9 +1056,15 @@ export default function TeamPage() {
                                             <h4 className="text-sm font-medium text-secondary-900 mb-2">
                                                 Nenhum consultor disponível
                                             </h4>
-                                            <p className="text-sm text-secondary-500">
-                                                Todos os consultores já estão em equipes ou não há consultores cadastrados.
-                                            </p>
+                                            <div className="text-sm text-secondary-500 space-y-1">
+                                                <p>Possíveis motivos:</p>
+                                                <ul className="text-xs list-disc list-inside space-y-1 text-left">
+                                                    <li>Todos os consultores dos seus estabelecimentos já estão na sua equipe</li>
+                                                    <li>Não há consultores ativos nos seus estabelecimentos</li>
+                                                    <li>Consultores estão em outras equipes</li>
+                                                    <li>Você não tem estabelecimentos vinculados</li>
+                                                </ul>
+                                            </div>
                                         </div>
                                     )}
 
@@ -1012,7 +1094,7 @@ export default function TeamPage() {
                                                 ) : (
                                                     <>
                                                         <UserPlusIcon className="h-4 w-4 mr-2" />
-                                                        Adicionar à Equipe
+                                                        Adicionar à Minha Equipe
                                                     </>
                                                 )}
                                             </button>
@@ -1057,7 +1139,7 @@ export default function TeamPage() {
                                         <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900">
                                             Remover da Equipe
                                         </Dialog.Title>
-                                        </div>
+                                    </div>
 
                                     <p className="text-sm text-secondary-500 mb-6">
                                         Tem certeza que deseja remover <strong>{selectedMember?.full_name}</strong> da sua equipe?
