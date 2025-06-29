@@ -680,13 +680,6 @@ export default function ImprovedDashboardPage() {
       >
         {getRoleSpecificInsights()}
       </motion.div>
-      {/* Role-specific Insight */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        {getRoleSpecificInsights()}
-      </motion.div>
 
       {/* Main Stats Cards */}
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
