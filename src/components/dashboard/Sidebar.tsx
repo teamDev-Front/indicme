@@ -2,7 +2,7 @@
 
 import { Fragment } from 'react'
 import { Dialog, Transition } from '@headlessui/react'
-import { XMarkIcon } from '@heroicons/react/24/outline'
+import { IdentificationIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import {
   HomeIcon,
   UsersIcon,
@@ -37,7 +37,7 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, userRole }: Sideb
         ...baseNavigation,
         { name: 'Leads', href: '/dashboard/leads', icon: UsersIcon },
         { name: 'Consultores', href: '/dashboard/consultants', icon: UserGroupIcon },
-        { name: 'Gerentes', href: '/dashboard/managers', icon: BuildingOfficeIcon },
+        { name: 'Gerentes', href: '/dashboard/managers', icon: IdentificationIcon },
         { name: 'Comissões', href: '/dashboard/commissions', icon: CurrencyDollarIcon },
         { name: 'Estabelecimentos', href: '/dashboard/establishments', icon: BuildingOfficeIcon },
         { name: 'Relatórios', href: '/dashboard/reports', icon: ChartBarIcon },
