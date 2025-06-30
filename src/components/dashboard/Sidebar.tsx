@@ -39,6 +39,7 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, userRole }: Sideb
         { name: 'Consultores', href: '/dashboard/consultants', icon: UserGroupIcon },
         { name: 'Gerentes', href: '/dashboard/managers', icon: BuildingOfficeIcon },
         { name: 'Comissões', href: '/dashboard/commissions', icon: CurrencyDollarIcon },
+        { name: 'Estabelecimentos', href: '/dashboard/establishments', icon: BuildingOfficeIcon },
         { name: 'Relatórios', href: '/dashboard/reports', icon: ChartBarIcon },
         ...(userRole === 'clinic_admin' ? [
           { name: 'Configurações', href: '/dashboard/settings', icon: CogIcon },
