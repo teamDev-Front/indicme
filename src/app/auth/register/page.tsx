@@ -5,10 +5,11 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
-import { EyeIcon, EyeSlashIcon, UserIcon, EnvelopeIcon, PhoneIcon, CheckCircleIcon } from '@heroicons/react/24/outline'
+import { EyeIcon, EyeSlashIcon, UserIcon, EnvelopeIcon, PhoneIcon, CheckCircleIcon, BuildingOfficeIcon } from '@heroicons/react/24/outline'
 import LogoIndicMe from '@/public/logo4.png'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
+import { createClient } from '@/utils/supabase/client'
 
 export default function RegisterPage() {
   const [formData, setFormData] = useState({
@@ -17,14 +18,21 @@ export default function RegisterPage() {
     phone: '',
     password: '',
     confirmPassword: '',
+    establishmentCode: '', // NOVO CAMPO
   })
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [acceptedTerms, setAcceptedTerms] = useState(false)
   const [passwordStrength, setPasswordStrength] = useState(0)
-  const { signUp, user } = useAuth()
+  const [establishmentInfo, setEstablishmentInfo] = useState<{
+    name: string
+    description?: string
+  } | null>(null)
+  const [validatingCode, setValidatingCode] = useState(false)
+  const { user } = useAuth()
   const router = useRouter()
+  const supabase = createClient()
 
   // Redirecionar se já estiver logado
   useEffect(() => {
@@ -47,11 +55,44 @@ export default function RegisterPage() {
     setPasswordStrength(strength)
   }, [formData.password])
 
+  // Validar código do estabelecimento
+  useEffect(() => {
+    const validateEstablishmentCode = async () => {
+      if (formData.establishmentCode.length === 6) {
+        setValidatingCode(true)
+        try {
+          const { data, error } = await supabase
+            .from('establishment_codes')
+            .select('name, description')
+            .eq('code', formData.establishmentCode.toUpperCase())
+            .eq('is_active', true)
+            .single()
+
+          if (error || !data) {
+            setEstablishmentInfo(null)
+            toast.error('Código do estabelecimento inválido')
+          } else {
+            setEstablishmentInfo(data)
+          }
+        } catch (error) {
+          setEstablishmentInfo(null)
+        } finally {
+          setValidatingCode(false)
+        }
+      } else {
+        setEstablishmentInfo(null)
+      }
+    }
+
+    const debounceTimer = setTimeout(validateEstablishmentCode, 500)
+    return () => clearTimeout(debounceTimer)
+  }, [formData.establishmentCode, supabase])
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setFormData(prev => ({
       ...prev,
-      [name]: value
+      [name]: name === 'establishmentCode' ? value.toUpperCase() : value
     }))
   }
 
@@ -93,6 +134,21 @@ export default function RegisterPage() {
       toast.error('Email inválido')
       return false
     }
+
+    if (!formData.establishmentCode.trim()) {
+      toast.error('Código do estabelecimento é obrigatório')
+      return false
+    }
+
+    if (formData.establishmentCode.length !== 6) {
+      toast.error('Código do estabelecimento deve ter 6 caracteres')
+      return false
+    }
+
+    if (!establishmentInfo) {
+      toast.error('Código do estabelecimento inválido')
+      return false
+    }
     
     if (!formData.password) {
       toast.error('Senha é obrigatória')
@@ -124,11 +180,175 @@ export default function RegisterPage() {
 
     try {
       setIsLoading(true)
-      await signUp(formData.email, formData.password, formData.fullName)
-      // O redirecionamento será feito automaticamente pelo contexto
-    } catch (error) {
+
+      // 1. Verificar se o estabelecimento ainda existe e está ativo
+      const { data: establishment, error: estError } = await supabase
+        .from('establishment_codes')
+        .select('code, name')
+        .eq('code', formData.establishmentCode)
+        .eq('is_active', true)
+        .single()
+
+      if (estError || !establishment) {
+        throw new Error('Estabelecimento não encontrado ou inativo')
+      }
+
+      // 2. Buscar o gerente responsável pelo estabelecimento
+      const { data: managerData, error: managerError } = await supabase
+        .from('user_establishments')
+        .select(`
+          user_id,
+          users!inner (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .eq('establishment_code', establishment.code)
+        .eq('status', 'active')
+        .eq('users.role', 'manager')
+        .limit(1)
+        .single()
+
+      if (managerError || !managerData) {
+        throw new Error('Nenhum gerente encontrado para este estabelecimento')
+      }
+
+      const managerId = managerData.user_id
+
+      // 3. Buscar a clínica do gerente
+      const { data: userClinic, error: clinicError } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', managerId)
+        .single()
+
+      if (clinicError || !userClinic) {
+        throw new Error('Clínica não encontrada para o gerente')
+      }
+
+      // 4. Criar usuário no auth
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: { 
+            full_name: formData.fullName,
+            establishment_code: formData.establishmentCode
+          }
+        }
+      })
+
+      if (signUpError) throw signUpError
+
+      if (!signUpData.user) {
+        throw new Error('Usuário não foi criado corretamente')
+      }
+
+      const newUserId = signUpData.user.id
+
+      // 5. Aguardar propagação
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // 6. Criar perfil como CONSULTOR
+      const { error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: newUserId,
+          email: formData.email,
+          full_name: formData.fullName,
+          phone: formData.phone || null,
+          role: 'consultant', // SEMPRE CONSULTOR
+          status: 'active',
+        })
+
+      if (profileError) {
+        // Se der erro de duplicata, tentar update
+        if (profileError.code === '23505') {
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({
+              email: formData.email,
+              full_name: formData.fullName,
+              phone: formData.phone || null,
+              role: 'consultant',
+              status: 'active',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', newUserId)
+
+          if (updateError) throw updateError
+        } else {
+          throw profileError
+        }
+      }
+
+      // 7. Associar à clínica
+      const { error: clinicAssocError } = await supabase
+        .from('user_clinics')
+        .insert({
+          user_id: newUserId,
+          clinic_id: userClinic.clinic_id,
+        })
+
+      if (clinicAssocError && clinicAssocError.code !== '23505') {
+        throw clinicAssocError
+      }
+
+      // 8. Criar hierarquia (vincular ao gerente)
+      const { error: hierarchyError } = await supabase
+        .from('hierarchies')
+        .insert({
+          manager_id: managerId,
+          consultant_id: newUserId,
+          clinic_id: userClinic.clinic_id,
+        })
+
+      if (hierarchyError && hierarchyError.code !== '23505') {
+        throw hierarchyError
+      }
+
+      // 9. Vincular ao estabelecimento
+      const { error: establishmentError } = await supabase
+        .from('user_establishments')
+        .insert({
+          user_id: newUserId,
+          establishment_code: establishment.code,
+          status: 'active',
+          added_by: managerId // Adicionado pelo gerente
+        })
+
+      if (establishmentError && establishmentError.code !== '23505') {
+        throw establishmentError
+      }
+
+      toast.success(`Conta criada com sucesso! Você foi vinculado ao estabelecimento ${establishment.name}.`)
+      
+      // Fazer login automático
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: formData.email,
+        password: formData.password,
+      })
+
+      if (signInError) {
+        toast.error('Conta criada, mas houve erro no login automático. Faça login manualmente.')
+        router.push('/auth/login')
+      } else {
+        router.push('/dashboard')
+      }
+
+    } catch (error: any) {
       console.error('Erro no cadastro:', error)
-      // O erro já será tratado no contexto
+      
+      if (error.message.includes('Estabelecimento não encontrado')) {
+        toast.error('Código do estabelecimento inválido ou inativo')
+      } else if (error.message.includes('Nenhum gerente encontrado')) {
+        toast.error('Este estabelecimento não possui um gerente responsável')
+      } else if (error.message.includes('already registered')) {
+        toast.error('Este email já está cadastrado no sistema')
+      } else {
+        toast.error(`Erro ao criar conta: ${error.message}`)
+      }
     } finally {
       setIsLoading(false)
     }
@@ -156,15 +376,72 @@ export default function RegisterPage() {
                 Criar conta
               </h2>
               <p className="text-secondary-600 text-center mb-8">
-                Junte-se ao IndicMe e comece a gerar indicações
+                Cadastre-se como consultor do estabelecimento
               </p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Código do Estabelecimento - PRIMEIRO CAMPO */}
+              <div>
+                <label htmlFor="establishmentCode" className="block text-sm font-medium text-secondary-700 mb-2">
+                  Código do Estabelecimento *
+                </label>
+                <div className="relative">
+                  <input
+                    id="establishmentCode"
+                    name="establishmentCode"
+                    type="text"
+                    maxLength={6}
+                    className="input pl-10 uppercase"
+                    placeholder="ABC123"
+                    value={formData.establishmentCode}
+                    onChange={handleInputChange}
+                    required
+                  />
+                  <BuildingOfficeIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
+                  {validatingCode && (
+                    <div className="absolute right-3 top-3">
+                      <div className="loading-spinner w-4 h-4"></div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Feedback do código */}
+                {formData.establishmentCode.length === 6 && !validatingCode && (
+                  <div className="mt-2">
+                    {establishmentInfo ? (
+                      <div className="bg-success-50 border border-success-200 rounded-lg p-3">
+                        <div className="flex items-center">
+                          <CheckCircleIcon className="h-4 w-4 text-success-500 mr-2" />
+                          <div>
+                            <p className="text-sm font-medium text-success-900">
+                              {establishmentInfo.name}
+                            </p>
+                            {establishmentInfo.description && (
+                              <p className="text-xs text-success-700">
+                                {establishmentInfo.description}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-danger-600">
+                        Código inválido ou estabelecimento inativo
+                      </p>
+                    )}
+                  </div>
+                )}
+                
+                <p className="text-xs text-secondary-500 mt-1">
+                  Código fornecido pelo seu gerente (6 caracteres)
+                </p>
+              </div>
+
               {/* Nome Completo */}
               <div>
                 <label htmlFor="fullName" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Nome Completo
+                  Nome Completo *
                 </label>
                 <div className="relative">
                   <input
@@ -185,7 +462,7 @@ export default function RegisterPage() {
               {/* Email */}
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Email
+                  Email *
                 </label>
                 <div className="relative">
                   <input
@@ -226,7 +503,7 @@ export default function RegisterPage() {
               {/* Senha */}
               <div>
                 <label htmlFor="password" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Senha
+                  Senha *
                 </label>
                 <div className="relative">
                   <input
@@ -275,7 +552,7 @@ export default function RegisterPage() {
               {/* Confirmar Senha */}
               <div>
                 <label htmlFor="confirmPassword" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Confirmar Senha
+                  Confirmar Senha *
                 </label>
                 <div className="relative">
                   <input
@@ -343,11 +620,18 @@ export default function RegisterPage() {
                 </div>
               </div>
 
+              {/* Info sobre cadastro como consultor */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-700">
+                  <strong>Sobre seu cadastro:</strong> Você será registrado como consultor do estabelecimento e automaticamente vinculado ao gerente responsável.
+                </p>
+              </div>
+
               {/* Botão de Cadastro */}
               <div>
                 <button
                   type="submit"
-                  disabled={isLoading}
+                  disabled={isLoading || !establishmentInfo}
                   className="btn btn-primary w-full btn-lg"
                 >
                   {isLoading ? (
@@ -356,7 +640,7 @@ export default function RegisterPage() {
                       Criando conta...
                     </>
                   ) : (
-                    'Criar conta'
+                    'Criar conta como consultor'
                   )}
                 </button>
               </div>
@@ -374,8 +658,6 @@ export default function RegisterPage() {
                 </p>
               </div>
             </form>
-
-            
           </motion.div>
         </div>
       </div>
@@ -391,44 +673,37 @@ export default function RegisterPage() {
               transition={{ duration: 0.6, delay: 0.2 }}
               className="text-center"
             >
-              <div className="mb-2">
-                <div className="w-24 h-24 mx-auto mb-6 relative">
-                  <div className="absolute inset-0">
-                    <div className="w-full h-full border-4 border-white/30 rounded-full"></div>
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 border-4 border-white/50 rounded-full"></div>
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-8 h-8 border-4 border-white rounded-full"></div>
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full"></div>
-                  </div>
-                </div>
+              <div className="mb-8">
+                <BuildingOfficeIcon className="w-24 h-24 mx-auto mb-6 text-white/90" />
               </div>
               
               <h1 className="text-4xl font-bold mb-4">
-                Junte-se ao IndicMe
+                Torne-se um Consultor
               </h1>
               <p className="text-xl text-white/90 mb-8 max-w-md">
-                Milhares de consultores já confiam na nossa plataforma para gerenciar suas indicações
+                Cadastre-se com o código do seu estabelecimento e comece a gerar indicações
               </p>
               
               <div className="grid grid-cols-1 gap-4 text-left max-w-sm">
                 <div className="flex items-center space-x-3">
                   <div className="w-2 h-2 bg-white rounded-full"></div>
-                  <span>Cadastro rápido e gratuito</span>
+                  <span>Vinculação automática ao estabelecimento</span>
                 </div>
                 <div className="flex items-center space-x-3">
                   <div className="w-2 h-2 bg-white rounded-full"></div>
-                  <span>Interface intuitiva e moderna</span>
+                  <span>Gerenciamento pela sua equipe</span>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <div className="w-2 h-2 bg-white rounded-full"></div>
+                  <span>Sistema de comissões automático</span>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <div className="w-2 h-2 bg-white rounded-full"></div>
+                  <span>Interface moderna e responsiva</span>
                 </div>
                 <div className="flex items-center space-x-3">
                   <div className="w-2 h-2 bg-white rounded-full"></div>
                   <span>Suporte técnico especializado</span>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 bg-white rounded-full"></div>
-                  <span>Segurança garantida dos dados</span>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 bg-white rounded-full"></div>
-                  <span>Relatórios em tempo real</span>
                 </div>
               </div>
             </motion.div>

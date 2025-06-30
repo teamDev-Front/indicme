@@ -157,7 +157,7 @@ export default function LoginPage() {
                 </button>
               </div>
 
-              {/* <div className="text-center">
+              <div className="text-center">
                 <p className="text-sm text-secondary-600">
                   Não tem uma conta?{' '}
                   <Link
@@ -167,7 +167,7 @@ export default function LoginPage() {
                     Cadastre-se aqui
                   </Link>
                 </p>
-              </div> */}
+              </div>
             </form>
           </motion.div>
         </div>
