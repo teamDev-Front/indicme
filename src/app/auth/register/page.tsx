@@ -194,11 +194,11 @@ export default function RegisterPage() {
       }
 
       // 2. Buscar o gerente responsável pelo estabelecimento
-      const { data: managerData, error: managerError } = await supabase
+     const { data: managerData, error: managerError } = await supabase
         .from('user_establishments')
         .select(`
           user_id,
-          users!inner (
+          users!user_establishments_user_id_fkey!inner (
             id,
             full_name,
             role
@@ -207,14 +207,17 @@ export default function RegisterPage() {
         .eq('establishment_code', establishment.code)
         .eq('status', 'active')
         .eq('users.role', 'manager')
-        .limit(1)
-        .single()
 
-      if (managerError || !managerData) {
+      if (managerError) {
+        console.error('Erro ao buscar gerente:', managerError)
+        throw new Error('Erro ao buscar gerente do estabelecimento')
+      }
+
+      if (!managerData || managerData.length === 0) {
         throw new Error('Nenhum gerente encontrado para este estabelecimento')
       }
 
-      const managerId = managerData.user_id
+      const managerId = managerData[0].user_id
 
       // 3. Buscar a clínica do gerente
       const { data: userClinic, error: clinicError } = await supabase
