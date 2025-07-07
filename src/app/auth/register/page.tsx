@@ -334,7 +334,7 @@ export default function RegisterPage() {
       })
 
       if (signInError) {
-        toast.error('Conta criada, mas houve erro no login automático. Faça login manualmente.')
+        
         router.push('/auth/login')
       } else {
         router.push('/dashboard')
