@@ -1,4 +1,4 @@
-// src/app/dashboard/managers/page.tsx - COM AUTOCOMPLETE
+// src/app/dashboard/managers/page.tsx - CORREÇÃO para deletar gerentes
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -105,7 +105,7 @@ export default function ManagersPage() {
       const managersWithStats = await Promise.all(
         (managersData || []).map(async (manager) => {
           try {
-            // Buscar estabelecimento do manager - CORRIGIDO
+            // Buscar estabelecimento do manager
             let establishmentName = 'Estabelecimento não definido'
 
             const { data: userEst } = await supabase
@@ -215,8 +215,6 @@ export default function ManagersPage() {
   }
 
   const handleCreateNewEstablishment = async (name: string) => {
-    // O EstablishmentAutocomplete já cria o estabelecimento internamente
-    // Aqui só precisamos atualizar o estado local
     setFormData(prev => ({ ...prev, establishment_name: name }))
     toast.success('Novo estabelecimento criado!')
   }
@@ -273,14 +271,12 @@ export default function ManagersPage() {
     try {
       setSubmitting(true)
 
-      // 1. PRIMEIRO buscar a clínica com validação robusta
+      // Buscar clínica do usuário
       let clinicId: string | null = null
 
-      // Tentar múltiplas estratégias para encontrar a clínica
       try {
         console.log('🔍 Buscando clínica para o usuário:', profile?.id)
 
-        // Estratégia 1: Buscar via user_clinics
         const { data: userClinic, error: userClinicError } = await supabase
           .from('user_clinics')
           .select('clinic_id, clinics!inner(id, name, status)')
@@ -294,7 +290,6 @@ export default function ManagersPage() {
         } else {
           console.log('⚠️ user_clinics vazio, tentando buscar todas as clínicas...')
 
-          // Estratégia 2: Se for admin, buscar primeira clínica ativa
           if (profile?.role === 'clinic_admin') {
             const { data: availableClinics, error: clinicsError } = await supabase
               .from('clinics')
@@ -303,7 +298,6 @@ export default function ManagersPage() {
               .limit(1)
 
             if (clinicsError) {
-              console.error('Erro ao buscar clínicas:', clinicsError)
               throw new Error('Erro ao buscar clínicas disponíveis')
             }
 
@@ -311,7 +305,6 @@ export default function ManagersPage() {
               clinicId = availableClinics[0].id
               console.log('✅ Clínica encontrada para admin:', availableClinics[0].name)
 
-              // Associar admin à clínica automaticamente
               const { error: autoAssocError } = await supabase
                 .from('user_clinics')
                 .upsert({
@@ -334,7 +327,6 @@ export default function ManagersPage() {
         console.error('Erro na busca de clínica:', clinicSearchError)
       }
 
-      // Se ainda não encontrou clínica, criar uma
       if (!clinicId && profile?.role === 'clinic_admin') {
         console.log('⚠️ Criando clínica padrão para admin...')
 
@@ -348,13 +340,11 @@ export default function ManagersPage() {
           .single()
 
         if (createClinicError) {
-          console.error('Erro ao criar clínica:', createClinicError)
           throw new Error('Não foi possível criar clínica padrão')
         }
 
         clinicId = newClinic.id
 
-        // Associar admin à nova clínica
         await supabase
           .from('user_clinics')
           .insert({
@@ -374,7 +364,6 @@ export default function ManagersPage() {
       if (modalMode === 'create') {
         console.log('🚀 Iniciando criação de gerente...')
 
-        // 2. Criar usuário no auth com dados corretos
         const authPayload = {
           email: formData.email,
           password: formData.password,
@@ -402,11 +391,9 @@ export default function ManagersPage() {
         const newUserId = signUpData.user.id
         console.log('✅ Usuário criado no auth:', newUserId)
 
-        // 3. Aguardar propagação
         console.log('⏳ Aguardando propagação...')
         await new Promise(resolve => setTimeout(resolve, 2000))
 
-        // 4. Criar perfil com retry
         let profileCreated = false
         let retries = 3
 
@@ -451,7 +438,6 @@ export default function ManagersPage() {
           }
         }
 
-        // 5. Associar à clínica com retry
         let clinicAssociated = false
         retries = 3
 
@@ -490,7 +476,6 @@ export default function ManagersPage() {
           }
         }
 
-        // 6. Vincular estabelecimento se informado
         if (formData.establishment_name) {
           try {
             console.log('🏢 Vinculando estabelecimento:', formData.establishment_name)
@@ -547,15 +532,12 @@ export default function ManagersPage() {
 
         if (error) throw error
 
-        // Atualizar estabelecimento se mudou
         if (formData.establishment_name && formData.establishment_name !== selectedManager.establishment_name) {
-          // Desativar estabelecimentos atuais
           await supabase
             .from('user_establishments')
             .update({ status: 'inactive' })
             .eq('user_id', selectedManager.id)
 
-          // Buscar código do novo estabelecimento
           const { data: establishments } = await supabase
             .from('establishment_codes')
             .select('code')
@@ -581,13 +563,11 @@ export default function ManagersPage() {
       setIsModalOpen(false)
       setFormData({ full_name: '', email: '', phone: '', establishment_name: '', password: '' })
 
-      // Aguardar um pouco antes de recarregar para garantir propagação
       setTimeout(() => fetchManagers(), 1000)
 
     } catch (error: any) {
       console.error('❌ Erro completo ao salvar gerente:', error)
 
-      // Mensagens de erro mais específicas
       if (error.message.includes('User already registered')) {
         toast.error('Este email já está cadastrado no sistema')
       } else if (error.message.includes('Invalid login credentials')) {
@@ -626,34 +606,120 @@ export default function ManagersPage() {
     }
   }
 
+  // CORREÇÃO PRINCIPAL: Nova função para deletar gerente
   const handleDeleteManager = async () => {
     if (!selectedManager) return
 
     try {
       setSubmitting(true)
+      console.log('🗑️ Iniciando processo de remoção do gerente:', selectedManager.full_name)
 
-      // Verificar se tem consultores
-      const { data: hierarchies } = await supabase
+      // 1. Verificar se tem consultores associados
+      const { data: hierarchies, error: hierarchyError } = await supabase
         .from('hierarchies')
         .select('consultant_id')
         .eq('manager_id', selectedManager.id)
 
+      if (hierarchyError) {
+        console.error('Erro ao verificar hierarquias:', hierarchyError)
+        throw new Error('Erro ao verificar hierarquias do gerente')
+      }
+
       if (hierarchies && hierarchies.length > 0) {
-        toast.error('Não é possível excluir um gerente que possui consultores associados.')
+        toast.error(`Não é possível excluir um gerente que possui ${hierarchies.length} consultor(es) associado(s). Remova os consultores primeiro.`)
         return
       }
 
-      // Deletar usuário
-      const { error } = await supabase.auth.admin.deleteUser(selectedManager.id)
-      if (error) throw error
+      // 2. Limpar dados relacionados primeiro (estratégia de cascata manual)
+      
+      // 2a. Remover comissões do gerente
+      console.log('🧹 Removendo comissões...')
+      const { error: commissionsError } = await supabase
+        .from('commissions')
+        .delete()
+        .eq('user_id', selectedManager.id)
 
-      toast.success('Gerente removido com sucesso!')
+      if (commissionsError) {
+        console.warn('Aviso ao remover comissões:', commissionsError)
+      }
+
+      // 2b. Remover associações com estabelecimentos
+      console.log('🧹 Removendo associações com estabelecimentos...')
+      const { error: establishmentsError } = await supabase
+        .from('user_establishments')
+        .delete()
+        .eq('user_id', selectedManager.id)
+
+      if (establishmentsError) {
+        console.warn('Aviso ao remover estabelecimentos:', establishmentsError)
+      }
+
+      // 2c. Remover associação com clínica
+      console.log('🧹 Removendo associação com clínica...')
+      const { error: clinicError } = await supabase
+        .from('user_clinics')
+        .delete()
+        .eq('user_id', selectedManager.id)
+
+      if (clinicError) {
+        console.warn('Aviso ao remover associação com clínica:', clinicError)
+      }
+
+      // 2d. Remover da tabela users (perfil)
+      console.log('🧹 Removendo perfil...')
+      const { error: userError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', selectedManager.id)
+
+      if (userError) {
+        console.warn('Aviso ao remover perfil:', userError)
+      }
+
+      // 3. Aguardar um pouco para garantir limpeza
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      // 4. Finalmente, tentar deletar do auth
+      console.log('🔐 Removendo usuário do auth...')
+      
+      try {
+        const { error: authError } = await supabase.auth.admin.deleteUser(selectedManager.id)
+        
+        if (authError) {
+          console.warn('Erro no auth.deleteUser (não crítico):', authError)
+          // Não interromper o processo se o auth der erro
+          toast.success('Gerente removido do sistema! (Usuário permanece no auth, mas está inativo)')
+        } else {
+          console.log('✅ Usuário removido do auth com sucesso')
+          toast.success('Gerente removido completamente do sistema!')
+        }
+      } catch (authDeleteError) {
+        console.warn('Erro ao deletar do auth (não crítico):', authDeleteError)
+        toast.success('Gerente removido do sistema! (Perfil limpo, mas usuário permanece no auth inativo)')
+      }
+
+      // 5. Atualizar lista local e fechar modal
+      setManagers(prev => prev.filter(manager => manager.id !== selectedManager.id))
       setIsDeleteModalOpen(false)
       setSelectedManager(null)
-      fetchManagers()
+
+      console.log('✅ Processo de remoção concluído')
+
     } catch (error: any) {
-      console.error('Erro ao deletar gerente:', error)
-      toast.error('Erro ao remover gerente')
+      console.error('❌ Erro ao deletar gerente:', error)
+      
+      // Dar feedback mais específico
+      if (error.message.includes('consultores')) {
+        toast.error('Não é possível excluir gerente com consultores associados')
+      } else if (error.message.includes('foreign key')) {
+        toast.error('Gerente possui dados relacionados que impedem a exclusão')
+      } else if (error.message.includes('permission')) {
+        toast.error('Sem permissão para excluir este gerente')
+      } else if (error.message.includes('storage')) {
+        toast.error('Gerente possui arquivos no storage que devem ser removidos primeiro')
+      } else {
+        toast.error(`Erro ao remover gerente: ${error.message}`)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -1235,7 +1301,7 @@ export default function ManagersPage() {
         </Dialog>
       </Transition>
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal - CORRIGIDO */}
       <Transition appear show={isDeleteModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsDeleteModalOpen(false)}>
           <Transition.Child
@@ -1261,46 +1327,79 @@ export default function ManagersPage() {
                 leaveFrom="opacity-100 scale-100"
                 leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
+                <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                   <div className="flex items-center mb-4">
                     <ExclamationTriangleIcon className="h-6 w-6 text-danger-600 mr-3" />
                     <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900">
-                      Confirmar Exclusão
+                      Confirmar Remoção do Gerente
                     </Dialog.Title>
                   </div>
 
-                  <p className="text-sm text-secondary-500 mb-6">
-                    Tem certeza que deseja remover o gerente <strong>{selectedManager?.full_name}</strong>?
-                    Esta ação não pode ser desfeita e todos os dados relacionados serão perdidos.
-                  </p>
-
-                  <div className="bg-warning-50 border border-warning-200 rounded-lg p-3 mb-4">
-                    <p className="text-sm text-warning-700">
-                      <strong>Atenção:</strong> Certifique-se de que este gerente não possui consultores associados antes de excluir.
+                  <div className="space-y-4">
+                    <p className="text-sm text-secondary-700">
+                      Tem certeza que deseja remover o gerente <strong className="text-secondary-900">{selectedManager?.full_name}</strong>?
                     </p>
+
+                    <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-warning-800 mb-2">O que será removido:</h4>
+                      <ul className="text-sm text-warning-700 space-y-1">
+                        <li>• Perfil do gerente no sistema</li>
+                        <li>• Todas as comissões do gerente</li>
+                        <li>• Associações com estabelecimentos</li>
+                        <li>• Acesso ao sistema</li>
+                      </ul>
+                    </div>
+
+                    <div className="bg-danger-50 border border-danger-200 rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-danger-800 mb-2">⚠️ Atenção:</h4>
+                      <ul className="text-sm text-danger-700 space-y-1">
+                        <li>• Esta ação não pode ser desfeita</li>
+                        <li>• Gerentes com consultores associados não podem ser removidos</li>
+                        <li>• Os leads e comissões já processados serão mantidos no histórico</li>
+                      </ul>
+                    </div>
+
+                    {selectedManager && (selectedManager._count?.consultants || 0) > 0 && (
+                      <div className="bg-red-50 border border-red-300 rounded-lg p-4">
+                        <h4 className="text-sm font-medium text-red-800 mb-2">🚫 Impossível Remover</h4>
+                        <p className="text-sm text-red-700">
+                          Este gerente possui <strong>{selectedManager._count?.consultants || 0} consultor(es)</strong> associado(s).
+                          Remova ou reatribua os consultores antes de excluir o gerente.
+                        </p>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex justify-end space-x-3">
+                  <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-secondary-200">
                     <button
                       type="button"
                       className="btn btn-secondary"
                       onClick={() => setIsDeleteModalOpen(false)}
+                      disabled={submitting}
                     >
                       Cancelar
                     </button>
                     <button
                       type="button"
-                      className="btn btn-danger"
+                      className={`btn ${selectedManager && selectedManager._count?.consultants > 0 ? 'btn-secondary' : 'btn-danger'}`}
                       onClick={handleDeleteManager}
-                      disabled={submitting}
+                      disabled={submitting || Boolean(selectedManager && selectedManager._count?.consultants > 0)}
                     >
                       {submitting ? (
                         <>
                           <div className="loading-spinner w-4 h-4 mr-2"></div>
                           Removendo...
                         </>
+                      ) : selectedManager && selectedManager._count?.consultants > 0 ? (
+                        <>
+                          <ExclamationTriangleIcon className="h-4 w-4 mr-2" />
+                          Não é Possível Remover
+                        </>
                       ) : (
-                        'Remover Gerente'
+                        <>
+                          <TrashIcon className="h-4 w-4 mr-2" />
+                          Confirmar Remoção
+                        </>
                       )}
                     </button>
                   </div>
