@@ -68,18 +68,18 @@ export default function EstablishmentsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedEstablishment, setSelectedEstablishment] = useState<EstablishmentCode | null>(null)
-  
+
   // Estados dos modals
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isCommissionModalOpen, setIsCommissionModalOpen] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
-  
+
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [submitting, setSubmitting] = useState(false)
   const [detailData, setDetailData] = useState<EstablishmentDetailData | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
-  
+
   // Estados do formulário principal
   const [formData, setFormData] = useState({
     code: '',
@@ -150,7 +150,7 @@ export default function EstablishmentsPage() {
           const commissions = commissionsResult.data || []
           const convertedLeads = leads.filter(l => l.status === 'converted')
           const totalArcadas = convertedLeads.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
-          
+
           // Usar configuração específica ou padrão
           const commissionSettings = settingsResult.data || {
             consultant_value_per_arcada: 750,
@@ -270,7 +270,7 @@ export default function EstablishmentsPage() {
           .single()
 
         if (error) throw error
-        
+
         // 2. Criar configurações de comissão
         const { error: commissionError } = await supabase
           .from('establishment_commissions')
@@ -290,7 +290,7 @@ export default function EstablishmentsPage() {
         } else {
           toast.success('Estabelecimento criado com sucesso!')
         }
-        
+
       } else {
         // Edição
         if (!selectedEstablishment) return
@@ -329,7 +329,7 @@ export default function EstablishmentsPage() {
 
       const { error } = await supabase
         .from('establishment_codes')
-        .update({ 
+        .update({
           is_active: newStatus,
           updated_at: new Date().toISOString()
         })
@@ -390,53 +390,157 @@ export default function EstablishmentsPage() {
     setIsCommissionModalOpen(true)
   }
 
+  // Função para abrir modal de detalhes - SUBSTITUA a existente
   const handleOpenDetailModal = async (establishment: EstablishmentCode) => {
-    console.log('📊 Abrindo modal de detalhes para:', establishment.name)
+    console.log('📊 Abrindo modal de detalhes para:', establishment.name, 'código:', establishment.code)
     setSelectedEstablishment(establishment)
     setLoadingDetails(true)
     setIsDetailModalOpen(true)
 
     try {
-      // Buscar dados detalhados
-      const [leadsResult, usersResult, commissionsResult] = await Promise.all([
-        supabase
-          .from('leads')
-          .select(`
+      console.log('🔍 Buscando dados detalhados...')
+
+      // 1. Buscar usuários do estabelecimento
+      const { data: usersResult, error: usersError } = await supabase
+        .from('user_establishments')
+        .select(`
+        *,
+        users!inner (
+          id,
+          full_name,
+          email,
+          role,
+          status
+        )
+      `)
+        .eq('establishment_code', establishment.code)
+        .eq('status', 'active')
+
+      if (usersError) {
+        console.error('Erro ao buscar usuários:', usersError)
+      } else {
+        console.log('✅ Usuários encontrados:', usersResult?.length || 0)
+      }
+
+      // 2. Buscar leads do estabelecimento
+      const { data: leadsResult, error: leadsError } = await supabase
+        .from('leads')
+        .select(`
+        *,
+        users:indicated_by!inner (
+          id,
+          full_name,
+          email,
+          role
+        )
+      `)
+        .eq('establishment_code', establishment.code)
+        .order('created_at', { ascending: false })
+
+      if (leadsError) {
+        console.error('Erro ao buscar leads:', leadsError)
+      } else {
+        console.log('✅ Leads encontrados:', leadsResult?.length || 0)
+      }
+
+      // 3. Buscar comissões do estabelecimento
+      const { data: commissionsResult, error: commissionsError } = await supabase
+        .from('commissions')
+        .select(`
+        *,
+        users!inner (
+          id,
+          full_name,
+          email,
+          role
+        )
+      `)
+        .eq('establishment_code', establishment.code)
+        .order('created_at', { ascending: false })
+
+      if (commissionsError) {
+        console.error('Erro ao buscar comissões:', commissionsError)
+      } else {
+        console.log('✅ Comissões encontradas:', commissionsResult?.length || 0)
+      }
+
+      // 4. Se não há dados diretos, buscar por usuários do estabelecimento
+      let alternativeLeads = []
+      let alternativeCommissions = []
+
+      if (!leadsResult || leadsResult.length === 0) {
+        console.log('🔄 Buscando leads alternativos...')
+
+        // Pegar IDs dos usuários do estabelecimento
+        const userIds = usersResult?.map(u => u.user_id) || []
+
+        if (userIds.length > 0) {
+          const { data: altLeads } = await supabase
+            .from('leads')
+            .select(`
             *,
-            users:indicated_by (full_name, email, role)
+            users:indicated_by!inner (
+              id,
+              full_name,
+              email,
+              role
+            )
           `)
-          .eq('establishment_code', establishment.code)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('user_establishments')
-          .select(`
+            .in('indicated_by', userIds)
+            .order('created_at', { ascending: false })
+
+          alternativeLeads = altLeads || []
+          console.log('✅ Leads alternativos encontrados:', alternativeLeads.length)
+
+          // Buscar comissões desses usuários
+          const { data: altCommissions } = await supabase
+            .from('commissions')
+            .select(`
             *,
-            users (full_name, email, role)
+            users!inner (
+              id,
+              full_name,
+              email,
+              role
+            )
           `)
-          .eq('establishment_code', establishment.code)
-          .eq('status', 'active'),
-        supabase
-          .from('commissions')
-          .select(`
-            *,
-            users (full_name, email, role)
-          `)
-          .eq('establishment_code', establishment.code)
-          .order('created_at', { ascending: false })
-      ])
+            .in('user_id', userIds)
+            .order('created_at', { ascending: false })
+
+          alternativeCommissions = altCommissions || []
+          console.log('✅ Comissões alternativas encontradas:', alternativeCommissions.length)
+        }
+      }
+
+      // Usar dados diretos se disponíveis, senão usar alternativos
+      const finalLeads = leadsResult && leadsResult.length > 0 ? leadsResult : alternativeLeads
+      const finalCommissions = commissionsResult && commissionsResult.length > 0 ? commissionsResult : alternativeCommissions
+
+      console.log('📊 Dados finais:', {
+        users: usersResult?.length || 0,
+        leads: finalLeads.length,
+        commissions: finalCommissions.length
+      })
 
       setDetailData({
-        leads: leadsResult.data || [],
-        users: usersResult.data || [],
-        commissions: commissionsResult.data || []
+        leads: finalLeads,
+        users: usersResult || [],
+        commissions: finalCommissions
       })
+
     } catch (error) {
-      console.error('Erro ao buscar detalhes:', error)
+      console.error('❌ Erro ao buscar detalhes:', error)
       toast.error('Erro ao carregar detalhes do estabelecimento')
+      setDetailData({
+        leads: [],
+        users: [],
+        commissions: []
+      })
     } finally {
       setLoadingDetails(false)
     }
   }
+
 
   const handleCloseCommissionModal = () => {
     setIsCommissionModalOpen(false)
@@ -444,6 +548,7 @@ export default function EstablishmentsPage() {
     fetchEstablishments() // Recarregar para atualizar configurações
   }
 
+  // Função para fechar modal de detalhes - SUBSTITUA a existente
   const handleCloseDetailModal = () => {
     setIsDetailModalOpen(false)
     setSelectedEstablishment(null)
@@ -792,9 +897,8 @@ export default function EstablishmentsPage() {
                     <td>
                       <button
                         onClick={() => handleToggleStatus(establishment)}
-                        className={`badge cursor-pointer hover:opacity-80 border-0 ${
-                          establishment.is_active ? 'badge-success' : 'badge-danger'
-                        }`}
+                        className={`badge cursor-pointer hover:opacity-80 border-0 ${establishment.is_active ? 'badge-success' : 'badge-danger'
+                          }`}
                       >
                         {establishment.is_active ? (
                           <>
@@ -910,7 +1014,7 @@ export default function EstablishmentsPage() {
                     {/* Dados do Estabelecimento */}
                     <div className="space-y-4">
                       <h4 className="text-md font-medium text-secondary-900 mb-3">Dados do Estabelecimento</h4>
-                      
+
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-secondary-700 mb-2">
@@ -1040,11 +1144,11 @@ export default function EstablishmentsPage() {
                     {modalMode === 'create' && (
                       <div className="space-y-4">
                         <h4 className="text-md font-medium text-secondary-900 mb-3">Configurações de Comissão</h4>
-                        
+
                         {/* Configurações do Consultor */}
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                           <h5 className="text-sm font-medium text-blue-900 mb-3">Comissões do Consultor</h5>
-                          
+
                           <div className="space-y-3">
                             <div>
                               <label className="block text-xs font-medium text-blue-800 mb-1">
@@ -1106,7 +1210,7 @@ export default function EstablishmentsPage() {
                         {/* Configurações do Gerente */}
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                           <h5 className="text-sm font-medium text-green-900 mb-3">Comissões do Gerente</h5>
-                          
+
                           <div className="space-y-3">
                             <div>
                               <label className="block text-xs font-medium text-green-800 mb-1">
@@ -1344,81 +1448,81 @@ export default function EstablishmentsPage() {
                     </button>
                   </div>
 
-              {loadingDetails ? (
-                <div className="flex items-center justify-center p-12">
-                  <div className="loading-spinner w-8 h-8"></div>
-                </div>
-              ) : detailData ? (
-                <div className="p-6">
-                  {/* Stats Summary */}
-                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <h4 className="font-medium text-blue-900 mb-2 flex items-center">
-                        <UsersIcon className="h-5 w-5 mr-2" />
-                        Leads ({detailData.leads.length})
-                      </h4>
-                      <div className="space-y-1 text-sm text-blue-700">
-                        <div>Novos: {detailData.leads.filter(l => l.status === 'new').length}</div>
-                        <div>Contatados: {detailData.leads.filter(l => l.status === 'contacted').length}</div>
-                        <div>Convertidos: {detailData.leads.filter(l => l.status === 'converted').length}</div>
-                        <div>Perdidos: {detailData.leads.filter(l => l.status === 'lost').length}</div>
-                      </div>
+                  {loadingDetails ? (
+                    <div className="flex items-center justify-center p-12">
+                      <div className="loading-spinner w-8 h-8"></div>
                     </div>
-                    
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <h4 className="font-medium text-green-900 mb-2 flex items-center">
-                        <UserGroupIcon className="h-5 w-5 mr-2" />
-                        Equipe ({detailData.users.length})
-                      </h4>
-                      <div className="space-y-1 text-sm text-green-700">
-                        <div>Gerentes: {detailData.users.filter(u => u.users?.role === 'manager').length}</div>
-                        <div>Consultores: {detailData.users.filter(u => u.users?.role === 'consultant').length}</div>
-                        <div>Conversão: {
-                          detailData.leads.length > 0 
-                            ? ((detailData.leads.filter(l => l.status === 'converted').length / detailData.leads.length) * 100).toFixed(1)
-                            : 0
-                        }%</div>
-                      </div>
-                    </div>
-                    
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                      <h4 className="font-medium text-yellow-900 mb-2 flex items-center">
-                        <CurrencyDollarIcon className="h-5 w-5 mr-2" />
-                        Financeiro
-                      </h4>
-                      <div className="space-y-1 text-sm text-yellow-700">
-                        <div>Total Comissões: R$ {detailData.commissions.reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
-                        <div>Pagas: R$ {detailData.commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
-                        <div>Pendentes: R$ {detailData.commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
-                      </div>
-                    </div>
+                  ) : detailData ? (
+                    <div className="p-6">
+                      {/* Stats Summary */}
+                      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                          <h4 className="font-medium text-blue-900 mb-2 flex items-center">
+                            <UsersIcon className="h-5 w-5 mr-2" />
+                            Leads ({detailData.leads.length})
+                          </h4>
+                          <div className="space-y-1 text-sm text-blue-700">
+                            <div>Novos: {detailData.leads.filter(l => l.status === 'new').length}</div>
+                            <div>Contatados: {detailData.leads.filter(l => l.status === 'contacted').length}</div>
+                            <div>Convertidos: {detailData.leads.filter(l => l.status === 'converted').length}</div>
+                            <div>Perdidos: {detailData.leads.filter(l => l.status === 'lost').length}</div>
+                          </div>
+                        </div>
 
-                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                      <h4 className="font-medium text-purple-900 mb-2 flex items-center">
-                        <ChartBarIcon className="h-5 w-5 mr-2" />
-                        Performance
-                      </h4>
-                      <div className="space-y-1 text-sm text-purple-700">
-                        <div>Arcadas: {detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)}</div>
-                        <div>Receita: R$ {((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750).toLocaleString('pt-BR')}</div>
-                        <div>Ticket Médio: R$ {
-                          detailData.leads.filter(l => l.status === 'converted').length > 0
-                            ? (((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750) / detailData.leads.filter(l => l.status === 'converted').length).toLocaleString('pt-BR')
-                            : '0'
-                        }</div>
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                          <h4 className="font-medium text-green-900 mb-2 flex items-center">
+                            <UserGroupIcon className="h-5 w-5 mr-2" />
+                            Equipe ({detailData.users.length})
+                          </h4>
+                          <div className="space-y-1 text-sm text-green-700">
+                            <div>Gerentes: {detailData.users.filter(u => u.users?.role === 'manager').length}</div>
+                            <div>Consultores: {detailData.users.filter(u => u.users?.role === 'consultant').length}</div>
+                            <div>Conversão: {
+                              detailData.leads.length > 0
+                                ? ((detailData.leads.filter(l => l.status === 'converted').length / detailData.leads.length) * 100).toFixed(1)
+                                : 0
+                            }%</div>
+                          </div>
+                        </div>
+
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                          <h4 className="font-medium text-yellow-900 mb-2 flex items-center">
+                            <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                            Financeiro
+                          </h4>
+                          <div className="space-y-1 text-sm text-yellow-700">
+                            <div>Total Comissões: R$ {detailData.commissions.reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                            <div>Pagas: R$ {detailData.commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                            <div>Pendentes: R$ {detailData.commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                          </div>
+                        </div>
+
+                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                          <h4 className="font-medium text-purple-900 mb-2 flex items-center">
+                            <ChartBarIcon className="h-5 w-5 mr-2" />
+                            Performance
+                          </h4>
+                          <div className="space-y-1 text-sm text-purple-700">
+                            <div>Arcadas: {detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)}</div>
+                            <div>Receita: R$ {((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750).toLocaleString('pt-BR')}</div>
+                            <div>Ticket Médio: R$ {
+                              detailData.leads.filter(l => l.status === 'converted').length > 0
+                                ? (((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750) / detailData.leads.filter(l => l.status === 'converted').length).toLocaleString('pt-BR')
+                                : '0'
+                            }</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-center text-secondary-500">
+                        Relatório detalhado em desenvolvimento...
                       </div>
                     </div>
-                  </div>
-
-                  <div className="text-center text-secondary-500">
-                    Relatório detalhado em desenvolvimento...
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <p className="text-secondary-500">Erro ao carregar dados do estabelecimento.</p>
-                </div>
-              )}
+                  ) : (
+                    <div className="text-center py-12">
+                      <p className="text-secondary-500">Erro ao carregar dados do estabelecimento.</p>
+                    </div>
+                  )}
                 </Dialog.Panel>
               </Transition.Child>
             </div>
