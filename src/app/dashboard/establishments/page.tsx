@@ -1,7 +1,7 @@
 // src/app/dashboard/establishments/page.tsx - VERSÃO CORRIGIDA COM MODALS
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, AwaitedReactNode, JSXElementConstructor, Key, ReactElement, ReactNode, ReactPortal } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import { motion } from 'framer-motion'
@@ -1705,11 +1705,344 @@ export default function EstablishmentsPage() {
                         </div>
                       </div>
 
-                      <div className="text-center text-secondary-500">
-                        Relatório detalhado em desenvolvimento...
+                      {/* Seção Principal: Consultores e Leads por Consultor */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                        {/* Consultores com Performance */}
+                        <div className="bg-white border border-secondary-200 rounded-lg p-6">
+                          <h4 className="font-medium text-secondary-900 mb-4 flex items-center">
+                            <UserGroupIcon className="h-5 w-5 mr-2" />
+                            Performance por Consultor
+                          </h4>
+                          <div className="space-y-4">
+                            {(() => {
+                              // Agrupar leads por consultor
+                              const consultorsMap = new Map()
+
+                              // Primeiro, adicionar todos os consultores do estabelecimento
+                              detailData.users
+                                .filter(u => u.users?.role === 'consultant')
+                                .forEach(userEst => {
+                                  consultorsMap.set(userEst.user_id, {
+                                    id: userEst.user_id,
+                                    name: userEst.users.full_name,
+                                    email: userEst.users.email,
+                                    leads: [],
+                                    totalLeads: 0,
+                                    convertedLeads: 0,
+                                    totalArcadas: 0,
+                                    totalComissoes: 0,
+                                    manager: null
+                                  })
+                                })
+
+                              // Adicionar leads aos consultores
+                              detailData.leads.forEach(lead => {
+                                if (consultorsMap.has(lead.indicated_by)) {
+                                  const consultor = consultorsMap.get(lead.indicated_by)
+                                  consultor.leads.push(lead)
+                                  consultor.totalLeads++
+                                  if (lead.status === 'converted') {
+                                    consultor.convertedLeads++
+                                    consultor.totalArcadas += (lead.arcadas_vendidas || 1)
+                                  }
+                                }
+                              })
+
+                              // Adicionar comissões aos consultores
+                              detailData.commissions.forEach(commission => {
+                                if (consultorsMap.has(commission.user_id) && commission.type === 'consultant') {
+                                  const consultor = consultorsMap.get(commission.user_id)
+                                  consultor.totalComissoes += commission.amount || 0
+                                }
+                              })
+
+                              return Array.from(consultorsMap.values()).map((consultor, index) => (
+                                <div key={consultor.id} className="border border-secondary-100 rounded-lg p-4">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center">
+                                      <div className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white font-medium mr-3">
+                                        {consultor.name.charAt(0).toUpperCase()}
+                                      </div>
+                                      <div>
+                                        <div className="font-medium text-secondary-900">{consultor.name}</div>
+                                        <div className="text-sm text-secondary-500">{consultor.email}</div>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-sm font-medium text-success-600">
+                                        R$ {consultor.totalComissoes.toLocaleString('pt-BR')}
+                                      </div>
+                                      <div className="text-xs text-secondary-500">Comissões</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-4 gap-3 text-center text-sm">
+                                    <div>
+                                      <div className="font-medium text-primary-600">{consultor.totalLeads}</div>
+                                      <div className="text-xs text-secondary-500">Total Leads</div>
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-success-600">{consultor.convertedLeads}</div>
+                                      <div className="text-xs text-secondary-500">Convertidos</div>
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-purple-600">{consultor.totalArcadas}</div>
+                                      <div className="text-xs text-secondary-500">Arcadas</div>
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-warning-600">
+                                        {consultor.totalLeads > 0 ? ((consultor.convertedLeads / consultor.totalLeads) * 100).toFixed(1) : 0}%
+                                      </div>
+                                      <div className="text-xs text-secondary-500">Conversão</div>
+                                    </div>
+                                  </div>
+
+                                  {/* Leads convertidos deste consultor */}
+                                  {consultor.leads.filter((l: { status: string }) => l.status === 'converted').length > 0 && (
+                                    <div className="mt-3 pt-3 border-t border-secondary-100">
+                                      <div className="text-xs font-medium text-secondary-700 mb-2">Leads Convertidos:</div>
+                                      <div className="space-y-1">
+                                        {consultor.leads
+                                          .filter((l: { status: string }) => l.status === 'converted')
+                                          .map((lead: { id: Key | null | undefined; full_name: string | number | bigint | boolean | ReactElement<any, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<AwaitedReactNode> | null | undefined; arcadas_vendidas: any; converted_at: any; updated_at: any }) => (
+                                            <div key={lead.id} className="flex justify-between items-center text-xs">
+                                              <span className="text-secondary-600">{lead.full_name}</span>
+                                              <div className="flex items-center space-x-2">
+                                                <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                                                  {lead.arcadas_vendidas || 1} arcada{(lead.arcadas_vendidas || 1) > 1 ? 's' : ''}
+                                                </span>
+                                                <span className="text-secondary-500">
+                                                  {new Date(lead.converted_at || lead.updated_at).toLocaleDateString('pt-BR')}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            })()}
+                          </div>
+                        </div>
+
+                        {/* Gerentes e Hierarquia */}
+                        <div className="bg-white border border-secondary-200 rounded-lg p-6">
+                          <h4 className="font-medium text-secondary-900 mb-4 flex items-center">
+                            <UserGroupIcon className="h-5 w-5 mr-2" />
+                            Gerentes e Hierarquia
+                          </h4>
+
+                          {(() => {
+                            const managers = detailData.users.filter(u => u.users?.role === 'manager')
+
+                            if (managers.length === 0) {
+                              return (
+                                <div className="text-center py-6 text-secondary-500">
+                                  <UserGroupIcon className="h-12 w-12 mx-auto mb-2 text-secondary-300" />
+                                  <p>Nenhum gerente vinculado a este estabelecimento</p>
+                                </div>
+                              )
+                            }
+
+                            return managers.map(managerEst => (
+                              <div key={managerEst.user_id} className="border border-secondary-100 rounded-lg p-4 mb-4">
+                                <div className="flex items-center mb-4">
+                                  <div className="w-12 h-12 bg-success-600 rounded-full flex items-center justify-center text-white font-medium mr-4">
+                                    {managerEst.users.full_name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-secondary-900">{managerEst.users.full_name}</div>
+                                    <div className="text-sm text-secondary-500">{managerEst.users.email}</div>
+                                    <div className="text-xs text-success-600 font-medium">Gerente</div>
+                                  </div>
+                                </div>
+
+                                {/* Comissões do Gerente */}
+                                {(() => {
+                                  const managerCommissions = detailData.commissions.filter(c =>
+                                    c.user_id === managerEst.user_id && c.type === 'manager'
+                                  )
+                                  const totalManagerCommissions = managerCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+
+                                  return (
+                                    <div className="grid grid-cols-3 gap-4 text-center text-sm mb-4">
+                                      <div>
+                                        <div className="font-medium text-success-600">R$ {totalManagerCommissions.toLocaleString('pt-BR')}</div>
+                                        <div className="text-xs text-secondary-500">Comissões Gerente</div>
+                                      </div>
+                                      <div>
+                                        <div className="font-medium text-primary-600">{managerCommissions.length}</div>
+                                        <div className="text-xs text-secondary-500">Bônus Recebidos</div>
+                                      </div>
+                                      <div>
+                                        <div className="font-medium text-warning-600">
+                                          {managerCommissions.filter(c => c.status === 'paid').length}
+                                        </div>
+                                        <div className="text-xs text-secondary-500">Pagos</div>
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
+
+                                {/* Equipe do Gerente */}
+                                {(() => {
+                                  const teamConsultants = detailData.users.filter(u =>
+                                    u.users?.role === 'consultant'
+                                    // Aqui você poderia adicionar lógica para verificar hierarquia se tiver essa informação
+                                  )
+
+                                  if (teamConsultants.length > 0) {
+                                    return (
+                                      <div>
+                                        <div className="text-xs font-medium text-secondary-700 mb-2">Equipe:</div>
+                                        <div className="grid grid-cols-1 gap-2">
+                                          {teamConsultants.map(consultant => {
+                                            const consultantLeads = detailData.leads.filter(l => l.indicated_by === consultant.user_id)
+                                            const convertedLeads = consultantLeads.filter(l => l.status === 'converted')
+
+                                            return (
+                                              <div key={consultant.user_id} className="flex justify-between items-center text-xs bg-secondary-50 rounded p-2">
+                                                <span className="font-medium">{consultant.users.full_name}</span>
+                                                <div className="flex space-x-3 text-secondary-600">
+                                                  <span>{consultantLeads.length} leads</span>
+                                                  <span className="text-success-600">{convertedLeads.length} convertidos</span>
+                                                  <span className="text-purple-600">
+                                                    {convertedLeads.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)} arcadas
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    )
+                                  }
+
+                                  return (
+                                    <div className="text-xs text-secondary-500 italic">
+                                      Nenhum consultor direto identificado
+                                    </div>
+                                  )
+                                })()}
+                              </div>
+                            ))
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Timeline de Conversões */}
+                      <div className="bg-white border border-secondary-200 rounded-lg p-6 mb-8">
+                        <h4 className="font-medium text-secondary-900 mb-4 flex items-center">
+                          <ChartBarIcon className="h-5 w-5 mr-2" />
+                          Timeline de Conversões
+                        </h4>
+
+                        {(() => {
+                          const convertedLeads = detailData.leads
+                            .filter(l => l.status === 'converted')
+                            .sort((a, b) => new Date(b.converted_at || b.updated_at).getTime() - new Date(a.converted_at || a.updated_at).getTime())
+
+                          if (convertedLeads.length === 0) {
+                            return (
+                              <div className="text-center py-6 text-secondary-500">
+                                <ChartBarIcon className="h-12 w-12 mx-auto mb-2 text-secondary-300" />
+                                <p>Nenhuma conversão registrada ainda</p>
+                              </div>
+                            )
+                          }
+
+                          return (
+                            <div className="space-y-3 max-h-64 overflow-y-auto">
+                              {convertedLeads.map((lead, index) => {
+                                const leadUser = detailData.users.find(u => u.user_id === lead.indicated_by)
+
+                                return (
+                                  <div key={lead.id} className="flex items-center justify-between p-3 bg-gradient-to-r from-success-50 to-success-25 border-l-4 border-success-500 rounded-r-lg">
+                                    <div className="flex items-center space-x-3">
+                                      <div className="w-8 h-8 bg-success-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
+                                        {index + 1}
+                                      </div>
+                                      <div>
+                                        <div className="font-medium text-secondary-900">{lead.full_name}</div>
+                                        <div className="text-sm text-secondary-600">
+                                          por {leadUser?.users?.full_name || 'Consultor não identificado'}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center space-x-4">
+                                      <div className="text-center">
+                                        <div className="text-lg font-bold text-purple-600">
+                                          {lead.arcadas_vendidas || 1}
+                                        </div>
+                                        <div className="text-xs text-secondary-500">
+                                          arcada{(lead.arcadas_vendidas || 1) > 1 ? 's' : ''}
+                                        </div>
+                                      </div>
+
+                                      <div className="text-center">
+                                        <div className="text-sm font-medium text-success-600">
+                                          R$ {((lead.arcadas_vendidas || 1) * 750).toLocaleString('pt-BR')}
+                                        </div>
+                                        <div className="text-xs text-secondary-500">comissão</div>
+                                      </div>
+
+                                      <div className="text-center">
+                                        <div className="text-sm text-secondary-700">
+                                          {new Date(lead.converted_at || lead.updated_at).toLocaleDateString('pt-BR')}
+                                        </div>
+                                        <div className="text-xs text-secondary-500">
+                                          {new Date(lead.converted_at || lead.updated_at).toLocaleTimeString('pt-BR', {
+                                            hour: '2-digit',
+                                            minute: '2-digit'
+                                          })}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
+                      </div>
+
+                      {/* Resumo Final */}
+                      <div className="bg-gradient-to-r from-primary-50 to-success-50 border border-primary-200 rounded-lg p-6">
+                        <h4 className="font-medium text-primary-900 mb-4">Resumo Executivo</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+                          <div>
+                            <div className="text-2xl font-bold text-primary-600">
+                              {detailData.leads.filter(l => l.status === 'converted').length}
+                            </div>
+                            <div className="text-sm text-primary-700">Conversões Totais</div>
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-purple-600">
+                              {detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)}
+                            </div>
+                            <div className="text-sm text-purple-700">Arcadas Vendidas</div>
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-success-600">
+                              R$ {detailData.commissions.reduce((sum, c) => sum + (c.amount || 0), 0).toLocaleString('pt-BR')}
+                            </div>
+                            <div className="text-sm text-success-700">Comissões Totais</div>
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-warning-600">
+                              {detailData.leads.length > 0 ?
+                                ((detailData.leads.filter(l => l.status === 'converted').length / detailData.leads.length) * 100).toFixed(1)
+                                : 0}%
+                            </div>
+                            <div className="text-sm text-warning-700">Taxa de Conversão</div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ) : (
+
                     <div className="text-center py-12">
                       <p className="text-secondary-500">Erro ao carregar dados do estabelecimento.</p>
                     </div>
