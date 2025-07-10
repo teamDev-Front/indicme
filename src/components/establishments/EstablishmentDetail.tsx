@@ -2,7 +2,7 @@
 import { EstablishmentCode } from "@/types"
 import { Dialog, Transition } from "@headlessui/react"
 import { ChartBarIcon, CurrencyDollarIcon, UserGroupIcon, UsersIcon, XMarkIcon } from "@heroicons/react/24/outline"
-import { createClient } from "@/utils/supabase/client"  // CORREÇÃO: usar o cliente correto
+import { createClient } from "@/utils/supabase/client"
 import { Fragment, useEffect, useState } from "react"
 import toast from 'react-hot-toast'
 
@@ -38,12 +38,14 @@ export function EstablishmentDetailModal({ isOpen, onClose, establishment }: Est
       setLoading(true)
       console.log('📊 Buscando dados para estabelecimento:', establishment.name, 'código:', establishment.code)
 
-      // 1. Buscar usuários do estabelecimento
+      // 1. Buscar usuários do estabelecimento - CORRIGIDO
       const { data: usersResult, error: usersError } = await supabase
         .from('user_establishments')
         .select(`
-          *,
-          users!inner (
+          user_id,
+          establishment_code,
+          status,
+          users!user_establishments_user_id_fkey (
             id,
             full_name,
             email,
@@ -60,12 +62,12 @@ export function EstablishmentDetailModal({ isOpen, onClose, establishment }: Est
         console.log('✅ Usuários encontrados:', usersResult?.length || 0)
       }
 
-      // 2. Buscar leads do estabelecimento
+      // 2. Buscar leads do estabelecimento - CORRIGIDO
       const { data: leadsResult, error: leadsError } = await supabase
         .from('leads')
         .select(`
           *,
-          users:indicated_by!inner (
+          users!leads_indicated_by_fkey (
             id,
             full_name,
             email,
@@ -81,12 +83,12 @@ export function EstablishmentDetailModal({ isOpen, onClose, establishment }: Est
         console.log('✅ Leads encontrados:', leadsResult?.length || 0)
       }
 
-      // 3. Buscar comissões do estabelecimento
+      // 3. Buscar comissões do estabelecimento - CORRIGIDO
       const { data: commissionsResult, error: commissionsError } = await supabase
         .from('commissions')
         .select(`
           *,
-          users!inner (
+          users!commissions_user_id_fkey (
             id,
             full_name,
             email,
@@ -116,7 +118,7 @@ export function EstablishmentDetailModal({ isOpen, onClose, establishment }: Est
             .from('leads')
             .select(`
               *,
-              users:indicated_by!inner (
+              users!leads_indicated_by_fkey (
                 id,
                 full_name,
                 email,
@@ -129,12 +131,12 @@ export function EstablishmentDetailModal({ isOpen, onClose, establishment }: Est
           alternativeLeads = altLeads || []
           console.log('✅ Leads alternativos encontrados:', alternativeLeads.length)
 
-          // Buscar comissões desses usuários
+          // Buscar comissões desses usuários - CORRIGIDO
           const { data: altCommissions } = await supabase
             .from('commissions')
             .select(`
               *,
-              users!inner (
+              users!commissions_user_id_fkey (
                 id,
                 full_name,
                 email,

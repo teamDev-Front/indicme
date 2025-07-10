@@ -390,7 +390,6 @@ export default function EstablishmentsPage() {
     setIsCommissionModalOpen(true)
   }
 
-  // Função para abrir modal de detalhes - SUBSTITUA a existente
   const handleOpenDetailModal = async (establishment: EstablishmentCode) => {
     console.log('📊 Abrindo modal de detalhes para:', establishment.name, 'código:', establishment.code)
     setSelectedEstablishment(establishment)
@@ -404,8 +403,10 @@ export default function EstablishmentsPage() {
       const { data: usersResult, error: usersError } = await supabase
         .from('user_establishments')
         .select(`
-        *,
-        users!inner (
+        user_id,
+        establishment_code,
+        status,
+        users!user_establishments_user_id_fkey (
           id,
           full_name,
           email,
@@ -427,7 +428,7 @@ export default function EstablishmentsPage() {
         .from('leads')
         .select(`
         *,
-        users:indicated_by!inner (
+        users!leads_indicated_by_fkey (
           id,
           full_name,
           email,
@@ -448,7 +449,7 @@ export default function EstablishmentsPage() {
         .from('commissions')
         .select(`
         *,
-        users!inner (
+        users!commissions_user_id_fkey (
           id,
           full_name,
           email,
@@ -479,7 +480,7 @@ export default function EstablishmentsPage() {
             .from('leads')
             .select(`
             *,
-            users:indicated_by!inner (
+            users!leads_indicated_by_fkey (
               id,
               full_name,
               email,
@@ -497,7 +498,7 @@ export default function EstablishmentsPage() {
             .from('commissions')
             .select(`
             *,
-            users!inner (
+            users!commissions_user_id_fkey (
               id,
               full_name,
               email,
@@ -541,6 +542,13 @@ export default function EstablishmentsPage() {
     }
   }
 
+  // Função para fechar modal de detalhes - SUBSTITUA a existente
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false)
+    setSelectedEstablishment(null)
+    setDetailData(null)
+  }
+
 
   const handleCloseCommissionModal = () => {
     setIsCommissionModalOpen(false)
@@ -548,12 +556,7 @@ export default function EstablishmentsPage() {
     fetchEstablishments() // Recarregar para atualizar configurações
   }
 
-  // Função para fechar modal de detalhes - SUBSTITUA a existente
-  const handleCloseDetailModal = () => {
-    setIsDetailModalOpen(false)
-    setSelectedEstablishment(null)
-    setDetailData(null)
-  }
+
 
   const filteredEstablishments = establishments.filter(est => {
     const matchesSearch = !searchTerm ||
