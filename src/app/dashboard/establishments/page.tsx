@@ -1,4 +1,4 @@
-// src/app/dashboard/establishments/page.tsx
+// src/app/dashboard/establishments/page.tsx - VERSÃO ATUALIZADA
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -15,10 +15,14 @@ import {
   ExclamationTriangleIcon,
   CheckCircleIcon,
   XCircleIcon,
+  CurrencyDollarIcon,
+  CogIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
+import CommissionSettingsModal from '@/components/establishments/ComissionSettingsModal'
 
 interface EstablishmentCode {
   id: string
@@ -36,6 +40,15 @@ interface EstablishmentCode {
   _stats?: {
     users_count: number
     leads_count: number
+    total_revenue: number
+    total_commissions: number
+    converted_leads: number
+  }
+  _commission_settings?: {
+    consultant_value_per_arcada: number
+    manager_bonus_35_arcadas: number
+    manager_bonus_50_arcadas: number
+    manager_bonus_75_arcadas: number
   }
 }
 
@@ -48,6 +61,8 @@ export default function EstablishmentsPage() {
   const [selectedEstablishment, setSelectedEstablishment] = useState<EstablishmentCode | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isCommissionModalOpen, setIsCommissionModalOpen] = useState(false)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [submitting, setSubmitting] = useState(false)
   const [formData, setFormData] = useState({
@@ -79,10 +94,10 @@ export default function EstablishmentsPage() {
 
       if (error) throw error
 
-      // Buscar estatísticas para cada estabelecimento
+      // Buscar estatísticas e configurações para cada estabelecimento
       const establishmentsWithStats = await Promise.all(
         (establishmentsData || []).map(async (establishment) => {
-          const [usersResult, leadsResult] = await Promise.all([
+          const [usersResult, leadsResult, commissionsResult, settingsResult] = await Promise.all([
             supabase
               .from('user_establishments')
               .select('user_id', { count: 'exact' })
@@ -90,16 +105,46 @@ export default function EstablishmentsPage() {
               .eq('status', 'active'),
             supabase
               .from('leads')
-              .select('id', { count: 'exact' })
+              .select('id, status, arcadas_vendidas')
+              .eq('establishment_code', establishment.code),
+            supabase
+              .from('commissions')
+              .select('amount, status')
+              .eq('establishment_code', establishment.code),
+            supabase
+              .from('establishment_commissions')
+              .select('*')
               .eq('establishment_code', establishment.code)
+              .single()
           ])
+
+          // Calcular estatísticas
+          const leads = leadsResult.data || []
+          const commissions = commissionsResult.data || []
+          const convertedLeads = leads.filter(l => l.status === 'converted')
+          const totalArcadas = convertedLeads.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
+          
+          // Usar configuração específica ou padrão
+          const commissionSettings = settingsResult.data || {
+            consultant_value_per_arcada: 750,
+            manager_bonus_35_arcadas: 5000,
+            manager_bonus_50_arcadas: 10000,
+            manager_bonus_75_arcadas: 15000,
+          }
+
+          const totalRevenue = totalArcadas * commissionSettings.consultant_value_per_arcada
+          const totalCommissions = commissions.reduce((sum, c) => sum + c.amount, 0)
 
           return {
             ...establishment,
             _stats: {
               users_count: usersResult.count || 0,
-              leads_count: leadsResult.count || 0,
-            }
+              leads_count: leads.length,
+              total_revenue: totalRevenue,
+              total_commissions: totalCommissions,
+              converted_leads: convertedLeads.length,
+            },
+            _commission_settings: commissionSettings
           }
         })
       )
@@ -280,6 +325,16 @@ export default function EstablishmentsPage() {
     }
   }
 
+  const handleOpenCommissionModal = (establishment: EstablishmentCode) => {
+    setSelectedEstablishment(establishment)
+    setIsCommissionModalOpen(true)
+  }
+
+  const handleOpenDetailModal = (establishment: EstablishmentCode) => {
+    setSelectedEstablishment(establishment)
+    setIsDetailModalOpen(true)
+  }
+
   const filteredEstablishments = establishments.filter(est => {
     const matchesSearch = !searchTerm ||
       est.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -298,6 +353,7 @@ export default function EstablishmentsPage() {
     inactive: establishments.filter(e => !e.is_active).length,
     totalUsers: establishments.reduce((sum, e) => sum + (e._stats?.users_count || 0), 0),
     totalLeads: establishments.reduce((sum, e) => sum + (e._stats?.leads_count || 0), 0),
+    totalRevenue: establishments.reduce((sum, e) => sum + (e._stats?.total_revenue || 0), 0),
   }
 
   if (loading) {
@@ -329,7 +385,7 @@ export default function EstablishmentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Estabelecimentos</h1>
           <p className="text-secondary-600">
-            Gerencie os códigos de estabelecimentos do sistema
+            Gerencie os estabelecimentos e suas configurações de comissão
           </p>
         </div>
 
@@ -342,8 +398,8 @@ export default function EstablishmentsPage() {
         </button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
+      {/* Enhanced Stats */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -394,27 +450,6 @@ export default function EstablishmentsPage() {
           <div className="card-body">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-warning-600">{stats.inactive}</span>
-                </div>
-              </div>
-              <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Inativos</p>
-                <p className="text-xs text-secondary-400">Estabelecimentos</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                   <span className="text-sm font-bold text-primary-600">{stats.totalUsers}</span>
                 </div>
@@ -430,7 +465,7 @@ export default function EstablishmentsPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
+          transition={{ delay: 0.3 }}
           className="card"
         >
           <div className="card-body">
@@ -443,6 +478,50 @@ export default function EstablishmentsPage() {
               <div className="ml-3">
                 <p className="text-xs font-medium text-secondary-500">Leads</p>
                 <p className="text-xs text-secondary-400">Gerados</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <CurrencyDollarIcon className="w-4 h-4 text-warning-600" />
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Receita</p>
+                <p className="text-xs font-bold text-warning-600">
+                  R$ {stats.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                </p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-danger-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-danger-600">{stats.inactive}</span>
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Inativos</p>
+                <p className="text-xs text-secondary-400">Estabelecimentos</p>
               </div>
             </div>
           </div>
@@ -492,7 +571,7 @@ export default function EstablishmentsPage() {
         </div>
       </motion.div>
 
-      {/* Table */}
+      {/* Enhanced Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -508,6 +587,8 @@ export default function EstablishmentsPage() {
                   <th>Código</th>
                   <th>Localização</th>
                   <th>Estatísticas</th>
+                  <th>Receita</th>
+                  <th>Comissões</th>
                   <th>Status</th>
                   <th>Ações</th>
                 </tr>
@@ -557,10 +638,39 @@ export default function EstablishmentsPage() {
                           <div className="text-xs text-secondary-500">Usuários</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-sm font-medium text-success-600">
+                          <div className="text-sm font-medium text-primary-600">
                             {establishment._stats?.leads_count || 0}
                           </div>
                           <div className="text-xs text-secondary-500">Leads</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-sm font-medium text-success-600">
+                            {establishment._stats?.converted_leads || 0}
+                          </div>
+                          <div className="text-xs text-secondary-500">Convertidos</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="text-center">
+                        <div className="text-sm font-medium text-success-600">
+                          R$ {(establishment._stats?.total_revenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          Total gerado
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="text-center">
+                        <div className="text-sm font-medium text-warning-600">
+                          R$ {establishment._commission_settings?.consultant_value_per_arcada.toLocaleString('pt-BR') || '750'}/arcada
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          Consultor
+                        </div>
+                        <div className="text-xs text-primary-600 mt-1">
+                          R$ {establishment._commission_settings?.manager_bonus_35_arcadas.toLocaleString('pt-BR') || '5.000'} (35 arc.)
                         </div>
                       </div>
                     </td>
@@ -587,10 +697,18 @@ export default function EstablishmentsPage() {
                     <td>
                       <div className="flex items-center space-x-2">
                         <button
+                          onClick={() => handleOpenDetailModal(establishment)}
                           className="btn btn-ghost btn-sm"
-                          title="Visualizar"
+                          title="Ver Detalhes"
                         >
-                          <EyeIcon className="h-4 w-4" />
+                          <ChartBarIcon className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleOpenCommissionModal(establishment)}
+                          className="btn btn-ghost btn-sm text-primary-600"
+                          title="Configurar Comissões"
+                        >
+                          <CurrencyDollarIcon className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleOpenModal('edit', establishment)}
