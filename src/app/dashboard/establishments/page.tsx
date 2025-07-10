@@ -1,4 +1,4 @@
-// src/app/dashboard/establishments/page.tsx - VERSÃO CORRIGIDA
+// src/app/dashboard/establishments/page.tsx - VERSÃO CORRIGIDA COM MODALS
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -18,6 +18,9 @@ import {
   CurrencyDollarIcon,
   CogIcon,
   ChartBarIcon,
+  UsersIcon,
+  UserGroupIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
@@ -65,14 +68,19 @@ export default function EstablishmentsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedEstablishment, setSelectedEstablishment] = useState<EstablishmentCode | null>(null)
+  
+  // Estados dos modals
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isCommissionModalOpen, setIsCommissionModalOpen] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+  
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [submitting, setSubmitting] = useState(false)
   const [detailData, setDetailData] = useState<EstablishmentDetailData | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
+  
+  // Estados do formulário principal
   const [formData, setFormData] = useState({
     code: '',
     name: '',
@@ -83,6 +91,8 @@ export default function EstablishmentsPage() {
     phone: '',
     email: '',
   })
+
+  // Estados das configurações de comissão
   const [commissionData, setCommissionData] = useState({
     consultant_value_per_arcada: 750,
     consultant_bonus_every_arcadas: 7,
@@ -91,6 +101,7 @@ export default function EstablishmentsPage() {
     manager_bonus_50_arcadas: 10000,
     manager_bonus_75_arcadas: 15000,
   })
+
   const supabase = createClient()
 
   useEffect(() => {
@@ -241,7 +252,8 @@ export default function EstablishmentsPage() {
           return
         }
 
-        const { error } = await supabase
+        // 1. Criar estabelecimento
+        const { data: newEstablishment, error } = await supabase
           .from('establishment_codes')
           .insert({
             code: formData.code.toUpperCase(),
@@ -254,31 +266,31 @@ export default function EstablishmentsPage() {
             email: formData.email || null,
             is_active: true,
           })
+          .select()
+          .single()
 
         if (error) throw error
         
-        // Se for criação, criar também as configurações de comissão
-        if (modalMode === 'create') {
-          const { error: commissionError } = await supabase
-            .from('establishment_commissions')
-            .insert({
-              establishment_code: formData.code.toUpperCase(),
-              consultant_value_per_arcada: commissionData.consultant_value_per_arcada,
-              consultant_bonus_every_arcadas: commissionData.consultant_bonus_every_arcadas,
-              consultant_bonus_value: commissionData.consultant_bonus_value,
-              manager_bonus_35_arcadas: commissionData.manager_bonus_35_arcadas,
-              manager_bonus_50_arcadas: commissionData.manager_bonus_50_arcadas,
-              manager_bonus_75_arcadas: commissionData.manager_bonus_75_arcadas,
-            })
+        // 2. Criar configurações de comissão
+        const { error: commissionError } = await supabase
+          .from('establishment_commissions')
+          .insert({
+            establishment_code: formData.code.toUpperCase(),
+            consultant_value_per_arcada: commissionData.consultant_value_per_arcada,
+            consultant_bonus_every_arcadas: commissionData.consultant_bonus_every_arcadas,
+            consultant_bonus_value: commissionData.consultant_bonus_value,
+            manager_bonus_35_arcadas: commissionData.manager_bonus_35_arcadas,
+            manager_bonus_50_arcadas: commissionData.manager_bonus_50_arcadas,
+            manager_bonus_75_arcadas: commissionData.manager_bonus_75_arcadas,
+          })
 
-          if (commissionError) {
-            console.warn('Erro ao criar configurações de comissão:', commissionError)
-            // Não interromper o processo, apenas avisar
-            toast.success('Estabelecimento criado, mas houve problema ao configurar comissões')
-          }
+        if (commissionError) {
+          console.warn('Erro ao criar configurações de comissão:', commissionError)
+          toast.success('Estabelecimento criado, mas houve problema ao configurar comissões')
+        } else {
+          toast.success('Estabelecimento criado com sucesso!')
         }
         
-        toast.success('Estabelecimento criado com sucesso!')
       } else {
         // Edição
         if (!selectedEstablishment) return
@@ -371,6 +383,7 @@ export default function EstablishmentsPage() {
     }
   }
 
+  // CORREÇÃO: Funções para abrir modais específicos
   const handleOpenCommissionModal = (establishment: EstablishmentCode) => {
     console.log('🔧 Abrindo modal de comissões para:', establishment.name)
     setSelectedEstablishment(establishment)
@@ -766,13 +779,13 @@ export default function EstablishmentsPage() {
                     <td>
                       <div className="text-center">
                         <div className="text-sm font-medium text-warning-600">
-                          R$ {establishment._commission_settings?.consultant_value_per_arcada.toLocaleString('pt-BR') || '750'}/arcada
+                          R$ {establishment._commission_settings?.consultant_value_per_arcada?.toLocaleString('pt-BR') || '750'}/arcada
                         </div>
                         <div className="text-xs text-secondary-500">
                           Consultor
                         </div>
                         <div className="text-xs text-primary-600 mt-1">
-                          R$ {establishment._commission_settings?.manager_bonus_35_arcadas.toLocaleString('pt-BR') || '5.000'} (35 arc.)
+                          R$ {establishment._commission_settings?.manager_bonus_35_arcadas?.toLocaleString('pt-BR') || '5.000'} (35 arc.)
                         </div>
                       </div>
                     </td>
@@ -862,7 +875,7 @@ export default function EstablishmentsPage() {
         </div>
       </motion.div>
 
-      {/* Create/Edit Modal */}
+      {/* Create/Edit Modal com Configurações de Comissão */}
       <Transition appear show={isModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
           <Transition.Child
@@ -888,135 +901,281 @@ export default function EstablishmentsPage() {
                 leaveFrom="opacity-100 scale-100"
                 leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
+                <Dialog.Panel className="w-full max-w-4xl transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                   <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
                     {modalMode === 'create' ? 'Novo Estabelecimento' : 'Editar Estabelecimento'}
                   </Dialog.Title>
 
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Código *
-                        </label>
-                        <div className="flex space-x-2">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Dados do Estabelecimento */}
+                    <div className="space-y-4">
+                      <h4 className="text-md font-medium text-secondary-900 mb-3">Dados do Estabelecimento</h4>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Código *
+                          </label>
+                          <div className="flex space-x-2">
+                            <input
+                              type="text"
+                              className="input flex-1 uppercase"
+                              value={formData.code}
+                              onChange={(e) => setFormData(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                              placeholder="ABC123"
+                              maxLength={6}
+                              disabled={modalMode === 'edit'}
+                            />
+                            {modalMode === 'create' && (
+                              <button
+                                type="button"
+                                onClick={generateCode}
+                                className="btn btn-secondary"
+                              >
+                                Gerar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Nome *
+                          </label>
                           <input
                             type="text"
-                            className="input flex-1 uppercase"
-                            value={formData.code}
-                            onChange={(e) => setFormData(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
-                            placeholder="ABC123"
-                            maxLength={6}
-                            disabled={modalMode === 'edit'}
+                            className="input"
+                            value={formData.name}
+                            onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                            placeholder="Nome do estabelecimento"
                           />
-                          {modalMode === 'create' && (
-                            <button
-                              type="button"
-                              onClick={generateCode}
-                              className="btn btn-secondary"
-                            >
-                              Gerar
-                            </button>
-                          )}
                         </div>
                       </div>
 
                       <div>
                         <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Nome *
+                          Descrição
                         </label>
                         <input
                           type="text"
                           className="input"
-                          value={formData.name}
-                          onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                          placeholder="Nome do estabelecimento"
+                          value={formData.description}
+                          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                          placeholder="Descrição opcional"
                         />
                       </div>
-                    </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Descrição
-                      </label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={formData.description}
-                        onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                        placeholder="Descrição opcional"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Endereço
-                      </label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={formData.address}
-                        onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
-                        placeholder="Endereço completo"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Cidade
+                          Endereço
                         </label>
                         <input
                           type="text"
                           className="input"
-                          value={formData.city}
-                          onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
-                          placeholder="Cidade"
+                          value={formData.address}
+                          onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                          placeholder="Endereço completo"
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Estado
-                        </label>
-                        <input
-                          type="text"
-                          className="input"
-                          value={formData.state}
-                          onChange={(e) => setFormData(prev => ({ ...prev, state: e.target.value }))}
-                          placeholder="SP"
-                          maxLength={2}
-                        />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Cidade
+                          </label>
+                          <input
+                            type="text"
+                            className="input"
+                            value={formData.city}
+                            onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
+                            placeholder="Cidade"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Estado
+                          </label>
+                          <input
+                            type="text"
+                            className="input"
+                            value={formData.state}
+                            onChange={(e) => setFormData(prev => ({ ...prev, state: e.target.value }))}
+                            placeholder="SP"
+                            maxLength={2}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Telefone
+                          </label>
+                          <input
+                            type="tel"
+                            className="input"
+                            value={formData.phone}
+                            onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                            placeholder="(11) 99999-9999"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-secondary-700 mb-2">
+                            Email
+                          </label>
+                          <input
+                            type="email"
+                            className="input"
+                            value={formData.email}
+                            onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                            placeholder="contato@estabelecimento.com"
+                          />
+                        </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Telefone
-                        </label>
-                        <input
-                          type="tel"
-                          className="input"
-                          value={formData.phone}
-                          onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                          placeholder="(11) 99999-9999"
-                        />
-                      </div>
+                    {/* Configurações de Comissão (apenas na criação) */}
+                    {modalMode === 'create' && (
+                      <div className="space-y-4">
+                        <h4 className="text-md font-medium text-secondary-900 mb-3">Configurações de Comissão</h4>
+                        
+                        {/* Configurações do Consultor */}
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                          <h5 className="text-sm font-medium text-blue-900 mb-3">Comissões do Consultor</h5>
+                          
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-blue-800 mb-1">
+                                Valor por Arcada (R$)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="input input-sm"
+                                value={commissionData.consultant_value_per_arcada}
+                                onChange={(e) => setCommissionData(prev => ({
+                                  ...prev,
+                                  consultant_value_per_arcada: parseFloat(e.target.value) || 0
+                                }))}
+                                placeholder="750.00"
+                              />
+                            </div>
 
-                      <div>
-                        <label className="block text-sm font-medium text-secondary-700 mb-2">
-                          Email
-                        </label>
-                        <input
-                          type="email"
-                          className="input"
-                          value={formData.email}
-                          onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                          placeholder="contato@estabelecimento.com"
-                        />
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs font-medium text-blue-800 mb-1">
+                                  Bônus a cada X arcadas
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  className="input input-sm"
+                                  value={commissionData.consultant_bonus_every_arcadas}
+                                  onChange={(e) => setCommissionData(prev => ({
+                                    ...prev,
+                                    consultant_bonus_every_arcadas: parseInt(e.target.value) || 1
+                                  }))}
+                                  placeholder="7"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium text-blue-800 mb-1">
+                                  Valor do Bônus (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="input input-sm"
+                                  value={commissionData.consultant_bonus_value}
+                                  onChange={(e) => setCommissionData(prev => ({
+                                    ...prev,
+                                    consultant_bonus_value: parseFloat(e.target.value) || 0
+                                  }))}
+                                  placeholder="750.00"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Configurações do Gerente */}
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                          <h5 className="text-sm font-medium text-green-900 mb-3">Comissões do Gerente</h5>
+                          
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-green-800 mb-1">
+                                Bônus a cada 35 arcadas (R$)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="input input-sm"
+                                value={commissionData.manager_bonus_35_arcadas}
+                                onChange={(e) => setCommissionData(prev => ({
+                                  ...prev,
+                                  manager_bonus_35_arcadas: parseFloat(e.target.value) || 0
+                                }))}
+                                placeholder="5000.00"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs font-medium text-green-800 mb-1">
+                                  Bônus 50 arcadas (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="input input-sm"
+                                  value={commissionData.manager_bonus_50_arcadas}
+                                  onChange={(e) => setCommissionData(prev => ({
+                                    ...prev,
+                                    manager_bonus_50_arcadas: parseFloat(e.target.value) || 0
+                                  }))}
+                                  placeholder="10000.00"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium text-green-800 mb-1">
+                                  Bônus 75 arcadas (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="input input-sm"
+                                  value={commissionData.manager_bonus_75_arcadas}
+                                  onChange={(e) => setCommissionData(prev => ({
+                                    ...prev,
+                                    manager_bonus_75_arcadas: parseFloat(e.target.value) || 0
+                                  }))}
+                                  placeholder="15000.00"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Preview das Configurações */}
+                        <div className="bg-secondary-50 border border-secondary-200 rounded-lg p-3">
+                          <h5 className="text-xs font-medium text-secondary-900 mb-2">Resumo</h5>
+                          <div className="text-xs text-secondary-700 space-y-1">
+                            <div>• Consultor: R$ {commissionData.consultant_value_per_arcada}/arcada + bônus a cada {commissionData.consultant_bonus_every_arcadas} arcadas</div>
+                            <div>• Gerente: Bônus em 35, 50 e 75 arcadas da equipe</div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   <div className="mt-6 flex justify-end space-x-3">
@@ -1124,6 +1283,142 @@ export default function EstablishmentsPage() {
                       )}
                     </button>
                   </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition>
+
+      {/* Commission Settings Modal */}
+      {isCommissionModalOpen && selectedEstablishment && (
+        <CommissionSettingsModal
+          isOpen={isCommissionModalOpen}
+          onClose={handleCloseCommissionModal}
+          establishmentCode={selectedEstablishment.code}
+          establishmentName={selectedEstablishment.name}
+          onSuccess={() => {
+            toast.success('Configurações de comissão atualizadas!')
+            handleCloseCommissionModal()
+          }}
+        />
+      )}
+
+      {/* Detail Modal */}
+      <Transition appear show={isDetailModalOpen} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={handleCloseDetailModal}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black bg-opacity-25" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4 text-center">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 scale-95"
+                enterTo="opacity-100 scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 scale-100"
+                leaveTo="opacity-0 scale-95"
+              >
+                <Dialog.Panel className="w-full max-w-6xl transform overflow-hidden rounded-2xl bg-white text-left align-middle shadow-xl transition-all">
+                  <div className="flex items-center justify-between p-6 border-b border-secondary-200">
+                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900">
+                      Relatório Detalhado - {selectedEstablishment?.name}
+                    </Dialog.Title>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleCloseDetailModal}
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+
+              {loadingDetails ? (
+                <div className="flex items-center justify-center p-12">
+                  <div className="loading-spinner w-8 h-8"></div>
+                </div>
+              ) : detailData ? (
+                <div className="p-6">
+                  {/* Stats Summary */}
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <h4 className="font-medium text-blue-900 mb-2 flex items-center">
+                        <UsersIcon className="h-5 w-5 mr-2" />
+                        Leads ({detailData.leads.length})
+                      </h4>
+                      <div className="space-y-1 text-sm text-blue-700">
+                        <div>Novos: {detailData.leads.filter(l => l.status === 'new').length}</div>
+                        <div>Contatados: {detailData.leads.filter(l => l.status === 'contacted').length}</div>
+                        <div>Convertidos: {detailData.leads.filter(l => l.status === 'converted').length}</div>
+                        <div>Perdidos: {detailData.leads.filter(l => l.status === 'lost').length}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <h4 className="font-medium text-green-900 mb-2 flex items-center">
+                        <UserGroupIcon className="h-5 w-5 mr-2" />
+                        Equipe ({detailData.users.length})
+                      </h4>
+                      <div className="space-y-1 text-sm text-green-700">
+                        <div>Gerentes: {detailData.users.filter(u => u.users?.role === 'manager').length}</div>
+                        <div>Consultores: {detailData.users.filter(u => u.users?.role === 'consultant').length}</div>
+                        <div>Conversão: {
+                          detailData.leads.length > 0 
+                            ? ((detailData.leads.filter(l => l.status === 'converted').length / detailData.leads.length) * 100).toFixed(1)
+                            : 0
+                        }%</div>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <h4 className="font-medium text-yellow-900 mb-2 flex items-center">
+                        <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                        Financeiro
+                      </h4>
+                      <div className="space-y-1 text-sm text-yellow-700">
+                        <div>Total Comissões: R$ {detailData.commissions.reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                        <div>Pagas: R$ {detailData.commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                        <div>Pendentes: R$ {detailData.commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0).toLocaleString('pt-BR')}</div>
+                      </div>
+                    </div>
+
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                      <h4 className="font-medium text-purple-900 mb-2 flex items-center">
+                        <ChartBarIcon className="h-5 w-5 mr-2" />
+                        Performance
+                      </h4>
+                      <div className="space-y-1 text-sm text-purple-700">
+                        <div>Arcadas: {detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)}</div>
+                        <div>Receita: R$ {((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750).toLocaleString('pt-BR')}</div>
+                        <div>Ticket Médio: R$ {
+                          detailData.leads.filter(l => l.status === 'converted').length > 0
+                            ? (((detailData.leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)) * 750) / detailData.leads.filter(l => l.status === 'converted').length).toLocaleString('pt-BR')
+                            : '0'
+                        }</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-center text-secondary-500">
+                    Relatório detalhado em desenvolvimento...
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <p className="text-secondary-500">Erro ao carregar dados do estabelecimento.</p>
+                </div>
+              )}
                 </Dialog.Panel>
               </Transition.Child>
             </div>
