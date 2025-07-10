@@ -1106,9 +1106,9 @@ export default function ManagersPage() {
                     </td>
                     <td>
                       <div className="flex items-center space-x-2">
-                        <button className="btn btn-ghost btn-sm" title="Visualizar">
+                        {/* <button className="btn btn-ghost btn-sm" title="Visualizar">
                           <EyeIcon className="h-4 w-4" />
-                        </button>
+                        </button> */}
                         {canEdit && (
                           <>
                             <button
