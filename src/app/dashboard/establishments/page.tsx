@@ -124,66 +124,254 @@ export default function EstablishmentsPage() {
       // Buscar estatísticas e configurações para cada estabelecimento
       const establishmentsWithStats = await Promise.all(
         (establishmentsData || []).map(async (establishment) => {
-          const [usersResult, leadsResult, commissionsResult, settingsResult] = await Promise.all([
-            supabase
+          try {
+            console.log(`🔍 Processando estabelecimento: ${establishment.name} (${establishment.code})`)
+
+            // 1. Buscar usuários do estabelecimento
+            const { data: usersData, count: usersCount, error: usersError } = await supabase
               .from('user_establishments')
               .select('user_id', { count: 'exact' })
               .eq('establishment_code', establishment.code)
-              .eq('status', 'active'),
-            supabase
+              .eq('status', 'active')
+
+            if (usersError) {
+              console.error(`❌ Erro ao buscar usuários do estabelecimento ${establishment.code}:`, usersError)
+            }
+
+            const userIds = usersData?.map(u => u.user_id) || []
+            console.log(`👥 Usuários encontrados para ${establishment.code}:`, userIds.length)
+
+            // 2. Buscar leads DE DUAS FORMAS (para garantir que não perdemos nenhum)
+            // A) Por establishment_code direto
+            const { data: leadsByCode, error: leadsCodeError } = await supabase
               .from('leads')
-              .select('id, status, arcadas_vendidas')
-              .eq('establishment_code', establishment.code),
-            supabase
+              .select('id, status, arcadas_vendidas, indicated_by')
+              .eq('establishment_code', establishment.code)
+
+            // B) Por usuários do estabelecimento (fallback caso establishment_code não esteja preenchido)
+            const { data: leadsByUsers, error: leadsUsersError } = await supabase
+              .from('leads')
+              .select('id, status, arcadas_vendidas, indicated_by, establishment_code')
+              .in('indicated_by', userIds.length > 0 ? userIds : ['00000000-0000-0000-0000-000000000000']) // UUID inválido se não há usuários
+
+            if (leadsCodeError) {
+              console.error(`❌ Erro ao buscar leads por código:`, leadsCodeError)
+            }
+            if (leadsUsersError) {
+              console.error(`❌ Erro ao buscar leads por usuários:`, leadsUsersError)
+            }
+
+            // Combinar e dedupllicar leads
+            const allLeadIds = new Set<string>()
+            const combinedLeads: any[] = []
+
+            // Priorizar leads que JÁ têm establishment_code
+            leadsByCode?.forEach(lead => {
+              allLeadIds.add(lead.id)
+              combinedLeads.push(lead)
+            })
+
+            // Adicionar leads de usuários que NÃO têm establishment_code ainda
+            leadsByUsers?.forEach(lead => {
+              if (!allLeadIds.has(lead.id)) {
+                combinedLeads.push(lead)
+              }
+            })
+
+            console.log(`📊 Leads por código direto: ${leadsByCode?.length || 0}`)
+            console.log(`📊 Leads por usuários: ${leadsByUsers?.length || 0}`)
+            console.log(`📊 Total de leads únicos: ${combinedLeads.length}`)
+
+            // 3. Buscar comissões DE DUAS FORMAS também
+            const { data: commissionsByCode, error: commissionsCodeError } = await supabase
               .from('commissions')
-              .select('amount, status')
-              .eq('establishment_code', establishment.code),
-            supabase
+              .select('id, amount, status, user_id')
+              .eq('establishment_code', establishment.code)
+
+            const { data: commissionsByUsers, error: commissionsUsersError } = await supabase
+              .from('commissions')
+              .select('id, amount, status, user_id, establishment_code')
+              .in('user_id', userIds.length > 0 ? userIds : ['00000000-0000-0000-0000-000000000000'])
+
+            if (commissionsCodeError) {
+              console.error(`❌ Erro ao buscar comissões por código:`, commissionsCodeError)
+            }
+            if (commissionsUsersError) {
+              console.error(`❌ Erro ao buscar comissões por usuários:`, commissionsUsersError)
+            }
+
+            // Combinar e deduplicar comissões
+            const allCommissionIds = new Set<string>()
+            const combinedCommissions: any[] = []
+
+            commissionsByCode?.forEach(commission => {
+              allCommissionIds.add(commission.id)
+              combinedCommissions.push(commission)
+            })
+
+            commissionsByUsers?.forEach(commission => {
+              if (!allCommissionIds.has(commission.id)) {
+                combinedCommissions.push(commission)
+              }
+            })
+
+            console.log(`💰 Comissões por código: ${commissionsByCode?.length || 0}`)
+            console.log(`💰 Comissões por usuários: ${commissionsByUsers?.length || 0}`)
+            console.log(`💰 Total comissões únicas: ${combinedCommissions.length}`)
+
+            // 4. Buscar configurações específicas do estabelecimento
+            const { data: settingsData, error: settingsError } = await supabase
               .from('establishment_commissions')
               .select('*')
               .eq('establishment_code', establishment.code)
               .single()
-          ])
 
-          // Calcular estatísticas
-          const leads = leadsResult.data || []
-          const commissions = commissionsResult.data || []
-          const convertedLeads = leads.filter(l => l.status === 'converted')
-          const totalArcadas = convertedLeads.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
+            if (settingsError && settingsError.code !== 'PGRST116') {
+              console.error(`❌ Erro ao buscar configurações:`, settingsError)
+            }
 
-          // Usar configuração específica ou padrão
-          const commissionSettings = settingsResult.data || {
-            consultant_value_per_arcada: 750,
-            manager_bonus_35_arcadas: 5000,
-            manager_bonus_50_arcadas: 10000,
-            manager_bonus_75_arcadas: 15000,
-          }
+            // 5. Calcular estatísticas
+            const convertedLeads = combinedLeads.filter(l => l.status === 'converted')
+            const totalArcadas = convertedLeads.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
-          const totalRevenue = totalArcadas * commissionSettings.consultant_value_per_arcada
-          const totalCommissions = commissions.reduce((sum, c) => sum + c.amount, 0)
+            console.log(`✅ Leads convertidos: ${convertedLeads.length}`)
+            console.log(`✅ Total de arcadas: ${totalArcadas}`)
 
-          return {
-            ...establishment,
-            _stats: {
-              users_count: usersResult.count || 0,
-              leads_count: leads.length,
-              total_revenue: totalRevenue,
-              total_commissions: totalCommissions,
-              converted_leads: convertedLeads.length,
-            },
-            _commission_settings: commissionSettings
+            // Usar configuração específica ou padrão
+            const commissionSettings = settingsData || {
+              consultant_value_per_arcada: 750,
+              manager_bonus_35_arcadas: 5000,
+              manager_bonus_50_arcadas: 10000,
+              manager_bonus_75_arcadas: 15000,
+            }
+
+            // IMPORTANTE: Aqui você precisa definir o valor real do tratamento
+            // Por enquanto, vou usar o valor da comissão como proxy
+            // Mas idealmente deveria ser: totalArcadas * VALOR_REAL_DO_TRATAMENTO
+            const totalRevenue = totalArcadas * commissionSettings.consultant_value_per_arcada
+            const totalCommissions = combinedCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+
+            console.log(`💵 Revenue calculado: R$ ${totalRevenue}`)
+            console.log(`💵 Comissões totais: R$ ${totalCommissions}`)
+            console.log(`=====================================`)
+
+            return {
+              ...establishment,
+              _stats: {
+                users_count: usersCount || 0,
+                leads_count: combinedLeads.length,
+                total_revenue: totalRevenue,
+                total_commissions: totalCommissions,
+                converted_leads: convertedLeads.length,
+              },
+              _commission_settings: commissionSettings
+            }
+
+          } catch (error) {
+            console.error(`❌ Erro ao processar estabelecimento ${establishment.code}:`, error)
+            // Retornar dados básicos em caso de erro
+            return {
+              ...establishment,
+              _stats: {
+                users_count: 0,
+                leads_count: 0,
+                total_revenue: 0,
+                total_commissions: 0,
+                converted_leads: 0,
+              },
+              _commission_settings: {
+                consultant_value_per_arcada: 750,
+                manager_bonus_35_arcadas: 5000,
+                manager_bonus_50_arcadas: 10000,
+                manager_bonus_75_arcadas: 15000,
+              }
+            }
           }
         })
       )
 
       setEstablishments(establishmentsWithStats)
     } catch (error: any) {
-      console.error('Erro ao buscar estabelecimentos:', error)
+      console.error('❌ Erro geral ao buscar estabelecimentos:', error)
       toast.error('Erro ao carregar estabelecimentos')
     } finally {
       setLoading(false)
     }
   }
+
+  // FUNÇÃO ADICIONAL: Para corrigir dados existentes
+  const fixExistingLeadsAndCommissions = async () => {
+    try {
+      console.log('🔧 Iniciando correção de dados existentes...')
+
+      // 1. Corrigir leads sem establishment_code
+      const { data: leadsWithoutCode } = await supabase
+        .from('leads')
+        .select('id, indicated_by')
+        .is('establishment_code', null)
+
+      console.log(`📋 Encontrados ${leadsWithoutCode?.length || 0} leads sem establishment_code`)
+
+      for (const lead of leadsWithoutCode || []) {
+        const { data: userEst } = await supabase
+          .from('user_establishments')
+          .select('establishment_code')
+          .eq('user_id', lead.indicated_by)
+          .eq('status', 'active')
+          .single()
+
+        if (userEst?.establishment_code) {
+          await supabase
+            .from('leads')
+            .update({ establishment_code: userEst.establishment_code })
+            .eq('id', lead.id)
+
+          console.log(`✅ Lead ${lead.id} associado ao estabelecimento ${userEst.establishment_code}`)
+        }
+      }
+
+      // 2. Corrigir comissões sem establishment_code  
+      const { data: commissionsWithoutCode } = await supabase
+        .from('commissions')
+        .select('id, user_id')
+        .is('establishment_code', null)
+
+      console.log(`💰 Encontradas ${commissionsWithoutCode?.length || 0} comissões sem establishment_code`)
+
+      for (const commission of commissionsWithoutCode || []) {
+        const { data: userEst } = await supabase
+          .from('user_establishments')
+          .select('establishment_code')
+          .eq('user_id', commission.user_id)
+          .eq('status', 'active')
+          .single()
+
+        if (userEst?.establishment_code) {
+          await supabase
+            .from('commissions')
+            .update({ establishment_code: userEst.establishment_code })
+            .eq('id', commission.id)
+
+          console.log(`✅ Comissão ${commission.id} associada ao estabelecimento ${userEst.establishment_code}`)
+        }
+      }
+
+      console.log('✅ Correção de dados concluída!')
+
+      // Recarregar dados após correção
+      await fetchEstablishments()
+
+    } catch (error) {
+      console.error('❌ Erro na correção de dados:', error)
+    }
+  }
+
+  // Chamar a função de correção se necessário (pode ser um botão no admin)
+  // useEffect(() => {
+  //   if (profile?.role === 'clinic_admin') {
+  //     fixExistingLeadsAndCommissions()
+  //   }
+  // }, [profile])
 
   const generateCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'

@@ -193,12 +193,21 @@ export default function LeadsPage() {
     if (!selectedLeadForConversion) return
 
     try {
-      setUpdatingStatus(selectedLeadForConversion.id)
+      // 1. CRUCIAL: Buscar o establishment_code do consultor
+      const { data: userEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', selectedLeadForConversion.indicated_by)
+        .eq('status', 'active')
+        .single() // Assumindo um estabelecimento por usuário
 
-      // Atualizar o lead
+      const establishmentCode = userEstablishment?.establishment_code
+
+      // 2. Atualizar o lead COM establishment_code
       const updateData = {
         status: 'converted' as const,
         arcadas_vendidas: arcadas,
+        establishment_code: establishmentCode, // CRUCIAL: Adicionar isso
         converted_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       }
@@ -210,29 +219,39 @@ export default function LeadsPage() {
 
       if (error) throw error
 
-      // Calcular comissão baseada nas arcadas
-      const valorPorArcada = 750
+      // 3. Buscar configurações do estabelecimento específico
+      const { data: settings } = await supabase
+        .from('establishment_commissions')
+        .select('*')
+        .eq('establishment_code', establishmentCode)
+        .single()
+
+      const valorPorArcada = settings?.consultant_value_per_arcada || 750
       const comissaoConsultor = arcadas * valorPorArcada
 
-      // Criar comissão do consultor
+      // 4. Criar comissão COM establishment_code
       await supabase
         .from('commissions')
         .insert({
           lead_id: selectedLeadForConversion.id,
           user_id: selectedLeadForConversion.indicated_by,
-          amount: comissaoConsultor,
           clinic_id: selectedLeadForConversion.clinic_id,
+          establishment_code: establishmentCode, // CRUCIAL: Adicionar isso
+          amount: comissaoConsultor,
           percentage: 100,
           type: 'consultant',
           status: 'pending',
+          arcadas_vendidas: arcadas,
+          valor_por_arcada: valorPorArcada
         })
 
-      // Se houver gerente, criar comissão do gerente (10% do valor total)
+      // 5. Se houver gerente, criar comissão dele também
       const { data: hierarchy } = await supabase
         .from('hierarchies')
         .select('manager_id')
         .eq('consultant_id', selectedLeadForConversion.indicated_by)
         .single()
+
 
       if (hierarchy?.manager_id) {
         const comissaoGerente = comissaoConsultor * 0.10
