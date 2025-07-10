@@ -1,4 +1,4 @@
-// src/app/dashboard/establishments/page.tsx - VERSÃO ATUALIZADA
+// src/app/dashboard/establishments/page.tsx - VERSÃO CORRIGIDA
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -52,6 +52,12 @@ interface EstablishmentCode {
   }
 }
 
+interface EstablishmentDetailData {
+  leads: any[]
+  users: any[]
+  commissions: any[]
+}
+
 export default function EstablishmentsPage() {
   const { profile } = useAuth()
   const [establishments, setEstablishments] = useState<EstablishmentCode[]>([])
@@ -65,6 +71,8 @@ export default function EstablishmentsPage() {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [submitting, setSubmitting] = useState(false)
+  const [detailData, setDetailData] = useState<EstablishmentDetailData | null>(null)
+  const [loadingDetails, setLoadingDetails] = useState(false)
   const [formData, setFormData] = useState({
     code: '',
     name: '',
@@ -74,6 +82,14 @@ export default function EstablishmentsPage() {
     state: '',
     phone: '',
     email: '',
+  })
+  const [commissionData, setCommissionData] = useState({
+    consultant_value_per_arcada: 750,
+    consultant_bonus_every_arcadas: 7,
+    consultant_bonus_value: 750,
+    manager_bonus_35_arcadas: 5000,
+    manager_bonus_50_arcadas: 10000,
+    manager_bonus_75_arcadas: 15000,
   })
   const supabase = createClient()
 
@@ -193,6 +209,14 @@ export default function EstablishmentsPage() {
         phone: '',
         email: '',
       })
+      setCommissionData({
+        consultant_value_per_arcada: 750,
+        consultant_bonus_every_arcadas: 7,
+        consultant_bonus_value: 750,
+        manager_bonus_35_arcadas: 5000,
+        manager_bonus_50_arcadas: 10000,
+        manager_bonus_75_arcadas: 15000,
+      })
       if (mode === 'create') {
         generateCode()
       }
@@ -232,6 +256,28 @@ export default function EstablishmentsPage() {
           })
 
         if (error) throw error
+        
+        // Se for criação, criar também as configurações de comissão
+        if (modalMode === 'create') {
+          const { error: commissionError } = await supabase
+            .from('establishment_commissions')
+            .insert({
+              establishment_code: formData.code.toUpperCase(),
+              consultant_value_per_arcada: commissionData.consultant_value_per_arcada,
+              consultant_bonus_every_arcadas: commissionData.consultant_bonus_every_arcadas,
+              consultant_bonus_value: commissionData.consultant_bonus_value,
+              manager_bonus_35_arcadas: commissionData.manager_bonus_35_arcadas,
+              manager_bonus_50_arcadas: commissionData.manager_bonus_50_arcadas,
+              manager_bonus_75_arcadas: commissionData.manager_bonus_75_arcadas,
+            })
+
+          if (commissionError) {
+            console.warn('Erro ao criar configurações de comissão:', commissionError)
+            // Não interromper o processo, apenas avisar
+            toast.success('Estabelecimento criado, mas houve problema ao configurar comissões')
+          }
+        }
+        
         toast.success('Estabelecimento criado com sucesso!')
       } else {
         // Edição
@@ -326,13 +372,69 @@ export default function EstablishmentsPage() {
   }
 
   const handleOpenCommissionModal = (establishment: EstablishmentCode) => {
+    console.log('🔧 Abrindo modal de comissões para:', establishment.name)
     setSelectedEstablishment(establishment)
     setIsCommissionModalOpen(true)
   }
 
-  const handleOpenDetailModal = (establishment: EstablishmentCode) => {
+  const handleOpenDetailModal = async (establishment: EstablishmentCode) => {
+    console.log('📊 Abrindo modal de detalhes para:', establishment.name)
     setSelectedEstablishment(establishment)
+    setLoadingDetails(true)
     setIsDetailModalOpen(true)
+
+    try {
+      // Buscar dados detalhados
+      const [leadsResult, usersResult, commissionsResult] = await Promise.all([
+        supabase
+          .from('leads')
+          .select(`
+            *,
+            users:indicated_by (full_name, email, role)
+          `)
+          .eq('establishment_code', establishment.code)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('user_establishments')
+          .select(`
+            *,
+            users (full_name, email, role)
+          `)
+          .eq('establishment_code', establishment.code)
+          .eq('status', 'active'),
+        supabase
+          .from('commissions')
+          .select(`
+            *,
+            users (full_name, email, role)
+          `)
+          .eq('establishment_code', establishment.code)
+          .order('created_at', { ascending: false })
+      ])
+
+      setDetailData({
+        leads: leadsResult.data || [],
+        users: usersResult.data || [],
+        commissions: commissionsResult.data || []
+      })
+    } catch (error) {
+      console.error('Erro ao buscar detalhes:', error)
+      toast.error('Erro ao carregar detalhes do estabelecimento')
+    } finally {
+      setLoadingDetails(false)
+    }
+  }
+
+  const handleCloseCommissionModal = () => {
+    setIsCommissionModalOpen(false)
+    setSelectedEstablishment(null)
+    fetchEstablishments() // Recarregar para atualizar configurações
+  }
+
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false)
+    setSelectedEstablishment(null)
+    setDetailData(null)
   }
 
   const filteredEstablishments = establishments.filter(est => {
@@ -743,8 +845,7 @@ export default function EstablishmentsPage() {
                 <p className="text-sm text-secondary-500">
                   {establishments.length === 0
                     ? 'Comece adicionando seu primeiro estabelecimento.'
-                    : 'Tente ajustar os filtros ou termo de busca.'
-                  }
+                    : 'Tente ajustar os filtros ou termo de busca.'}
                 </p>
                 {establishments.length === 0 && (
                   <button
