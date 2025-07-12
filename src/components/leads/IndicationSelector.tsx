@@ -81,43 +81,99 @@ export default function IndicationSelector({
     }
   }
 
-  const fetchConsultants = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id),
-          user_establishments (
-            establishment_code,
-            establishment_codes (
-              code,
-              name
-            )
-          )
-        `)
-        .eq('user_clinics.clinic_id', clinicId)
-        .eq('role', 'consultant')
-        .eq('status', 'active')
-        .order('full_name')
 
-      if (error) throw error
+const fetchConsultants = async () => {
+  try {
+    console.log('🔍 Buscando consultores para clínica:', clinicId)
+    
+    // CORREÇÃO: Query simplificada e corrigida
+    const { data, error } = await supabase
+      .from('users')
+      .select(`
+        id,
+        full_name,
+        email,
+        user_clinics!inner(clinic_id)
+      `)
+      .eq('user_clinics.clinic_id', clinicId)
+      .eq('role', 'consultant')
+      .eq('status', 'active')
+      .order('full_name')
 
-      const consultantsData = data?.map((consultant: any) => ({
-        id: consultant.id,
-        full_name: consultant.full_name,
-        email: consultant.email,
-        establishment_name: (consultant.user_establishments?.[0]?.establishment_codes as any)?.name || 'Sem estabelecimento',
-        establishment_code: (consultant.user_establishments?.[0]?.establishment_codes as any)?.code
-      })) || []
-
-      setConsultants(consultantsData)
-    } catch (error) {
-      console.error('Erro ao buscar consultores:', error)
+    if (error) {
+      console.error('❌ Erro ao buscar consultores:', error)
+      return
     }
+
+    console.log('✅ Consultores encontrados (dados brutos):', data?.length || 0)
+
+    if (!data || data.length === 0) {
+      console.log('⚠️ Nenhum consultor encontrado para a clínica')
+      setConsultants([])
+      return
+    }
+
+    // Para cada consultor, buscar seu estabelecimento separadamente
+    const consultantsWithEstablishments = await Promise.all(
+      data.map(async (consultant) => {
+        try {
+          // Buscar estabelecimento do consultor
+          const { data: userEst, error: estError } = await supabase
+            .from('user_establishments')
+            .select(`
+              establishment_code,
+              establishment_codes!user_establishments_establishment_code_fkey (
+                code,
+                name
+              )
+            `)
+            .eq('user_id', consultant.id)
+            .eq('status', 'active')
+            .maybeSingle() // Pode não ter estabelecimento
+
+          if (estError) {
+            console.warn(`⚠️ Erro ao buscar estabelecimento para ${consultant.full_name}:`, estError)
+          }
+
+          let establishmentName = 'Sem estabelecimento'
+          let establishmentCode = ''
+
+          if (userEst?.establishment_codes) {
+            // CORREÇÃO: Tratar o tipo corretamente
+            const estData = userEst.establishment_codes as any
+            establishmentName = estData.name || `Código: ${userEst.establishment_code}`
+            establishmentCode = estData.code || userEst.establishment_code
+          }
+
+          return {
+            id: consultant.id,
+            full_name: consultant.full_name,
+            email: consultant.email,
+            establishment_name: establishmentName,
+            establishment_code: establishmentCode
+          }
+        } catch (error) {
+          console.warn(`⚠️ Erro ao processar consultor ${consultant.full_name}:`, error)
+          return {
+            id: consultant.id,
+            full_name: consultant.full_name,
+            email: consultant.email,
+            establishment_name: 'Erro ao carregar',
+            establishment_code: ''
+          }
+        }
+      })
+    )
+
+    console.log('✅ Consultores processados:', consultantsWithEstablishments.length)
+    console.log('📋 Exemplo de consultor:', consultantsWithEstablishments[0])
+
+    setConsultants(consultantsWithEstablishments)
+  } catch (error) {
+    console.error('❌ Erro geral ao buscar consultores:', error)
+    setConsultants([])
   }
+}
 
   const fetchConvertedLeads = async () => {
     try {
