@@ -1,3 +1,4 @@
+// src/app/dashboard/leads/new/page.tsx - VERSÃO COMPLETA CORRIGIDA
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -67,6 +68,9 @@ export default function NewLeadPage() {
     percentage: number
     finalValue: number
   } | null>(null)
+  
+  // 🔧 CORREÇÃO: Adicionar estado para clinicId
+  const [clinicId, setClinicId] = useState<string>('')
 
   const supabase = createClient()
 
@@ -91,11 +95,18 @@ export default function NewLeadPage() {
   const indicatedById = advancedForm.watch('indicated_by_id')
   const commissionPercentage = advancedForm.watch('commission_percentage')
 
+  // 🔧 CORREÇÃO: Buscar clinicId primeiro
   useEffect(() => {
-    if (isAdvancedForm) {
+    if (profile) {
+      fetchClinicId()
+    }
+  }, [profile])
+
+  useEffect(() => {
+    if (isAdvancedForm && clinicId) {
       fetchAdvancedData()
     }
-  }, [isAdvancedForm])
+  }, [isAdvancedForm, clinicId])
 
   useEffect(() => {
     if (indicatedByType === 'lead') {
@@ -111,8 +122,33 @@ export default function NewLeadPage() {
     }
   }, [indicatedById, commissionPercentage, selectedEstablishment, isAdvancedForm])
 
+  // 🔧 CORREÇÃO: Nova função para buscar clinicId
+  const fetchClinicId = async () => {
+    try {
+      console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
+      
+      const { data: userClinic, error } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile?.id)
+        .single()
+
+      if (error || !userClinic) {
+        console.error('❌ Erro ao buscar clínica:', error)
+        toast.error('Erro: Usuário não está associado a uma clínica')
+        return
+      }
+
+      console.log('✅ Clinic ID encontrado:', userClinic.clinic_id)
+      setClinicId(userClinic.clinic_id)
+    } catch (error) {
+      console.error('❌ Erro ao buscar clinic_id:', error)
+      toast.error('Erro ao carregar dados da clínica')
+    }
+  }
+
   const fetchAdvancedData = async () => {
-    if (!profile?.id) return
+    if (!profile?.id || !clinicId) return
 
     try {
       await Promise.all([
@@ -128,18 +164,9 @@ export default function NewLeadPage() {
 
   const fetchConsultants = async () => {
     try {
+      console.log('🔍 Buscando consultores para clínica:', clinicId)
+      
       // CORREÇÃO 1: Query corrigida para buscar consultores
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) {
-        console.error('Admin não está associado a uma clínica')
-        return
-      }
-
       const { data, error } = await supabase
         .from('users')
         .select(`
@@ -154,7 +181,7 @@ export default function NewLeadPage() {
             )
           )
         `)
-        .eq('user_clinics.clinic_id', userClinic.clinic_id)
+        .eq('user_clinics.clinic_id', clinicId)
         .eq('role', 'consultant')
         .eq('status', 'active')
         .order('full_name')
@@ -186,14 +213,6 @@ export default function NewLeadPage() {
 
   const fetchConvertedLeads = async () => {
     try {
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) return
-
       const { data, error } = await supabase
         .from('leads')
         .select(`
@@ -206,7 +225,7 @@ export default function NewLeadPage() {
             email
           )
         `)
-        .eq('clinic_id', userClinic.clinic_id)
+        .eq('clinic_id', clinicId)
         .eq('status', 'converted')
         .order('created_at', { ascending: false })
         .limit(50)
@@ -277,21 +296,13 @@ export default function NewLeadPage() {
 
   // Submit para formulário básico (consultant/manager)
   const onBasicSubmit = async (data: BasicLeadFormData) => {
-    if (!profile) return
+    if (!profile || !clinicId) {
+      toast.error('Dados do usuário ou clínica não encontrados')
+      return
+    }
 
     try {
       setIsSubmitting(true)
-
-      // Buscar a clínica do usuário
-      const { data: userClinic, error: clinicError } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile.id)
-        .single()
-
-      if (clinicError || !userClinic) {
-        throw new Error('Usuário não está associado a uma clínica')
-      }
 
       // Buscar establishment_code do usuário
       const { data: userEstablishment } = await supabase
@@ -308,7 +319,7 @@ export default function NewLeadPage() {
         email: data.email || null,
         notes: data.notes || null,
         indicated_by: profile.id, // O próprio usuário indica
-        clinic_id: userClinic.clinic_id,
+        clinic_id: clinicId,
         status: 'new' as const,
         establishment_code: userEstablishment?.establishment_code || null,
         commission_percentage: 100,
@@ -335,21 +346,13 @@ export default function NewLeadPage() {
 
   // Submit para formulário avançado (admin)
   const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
-    if (!profile) return
+    if (!profile || !clinicId) {
+      toast.error('Dados do usuário ou clínica não encontrados')
+      return
+    }
 
     try {
       setIsSubmitting(true)
-
-      // Buscar a clínica do usuário
-      const { data: userClinic, error: clinicError } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile.id)
-        .single()
-
-      if (clinicError || !userClinic) {
-        throw new Error('Usuário não está associado a uma clínica')
-      }
 
       // Determinar quem realmente indicou
       let actualIndicatedBy = data.indicated_by_id
@@ -371,7 +374,7 @@ export default function NewLeadPage() {
         email: data.email || null,
         notes: data.notes || null,
         indicated_by: actualIndicatedBy,
-        clinic_id: userClinic.clinic_id,
+        clinic_id: clinicId,
         status: 'new' as const,
         // Campos adicionais para tracking
         original_lead_id: originalLeadId,
@@ -559,295 +562,320 @@ export default function NewLeadPage() {
         </div>
       </div>
 
-      {/* Form */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="card max-w-4xl mx-auto"
-      >
-        <form onSubmit={advancedForm.handleSubmit(onAdvancedSubmit)} className="card-body space-y-8">
-          {/* Dados do Lead */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Dados do Lead
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Nome Completo *
-                </label>
-                <input
-                  type="text"
-                  id="full_name"
-                  {...advancedForm.register('full_name')}
-                  className={`input ${advancedForm.formState.errors.full_name ? 'input-error' : ''}`}
-                  placeholder="Nome completo do lead"
-                />
-                {advancedForm.formState.errors.full_name && (
-                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.full_name.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Telefone *
-                </label>
-                <input
-                  type="tel"
-                  id="phone"
-                  {...advancedForm.register('phone')}
-                  className={`input ${advancedForm.formState.errors.phone ? 'input-error' : ''}`}
-                  placeholder="(11) 99999-9999"
-                />
-                {advancedForm.formState.errors.phone && (
-                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.phone.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Email (opcional)
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  {...advancedForm.register('email')}
-                  className={`input ${advancedForm.formState.errors.email ? 'input-error' : ''}`}
-                  placeholder="email@exemplo.com"
-                />
-                {advancedForm.formState.errors.email && (
-                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.email.message}</p>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
-                  Observações (opcional)
-                </label>
-                <textarea
-                  id="notes"
-                  {...advancedForm.register('notes')}
-                  rows={3}
-                  className="input"
-                  placeholder="Informações adicionais sobre o lead..."
-                />
-              </div>
-            </div>
+      {/* Debug Info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-yellow-800 mb-2">Debug Info</h4>
+          <div className="text-xs text-yellow-700 space-y-1">
+            <div>Profile ID: {profile?.id}</div>
+            <div>Clinic ID: {clinicId || 'Carregando...'}</div>
+            <div>Consultores: {consultants.length}</div>
+            <div>Leads convertidos: {convertedLeads.length}</div>
+            <div>Tipo selecionado: {indicatedByType}</div>
+            <div>ID selecionado: {indicatedById}</div>
           </div>
+        </div>
+      )}
 
-          {/* Quem Indicou */}
-          <div>
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Quem Indicou Este Lead?
-            </h3>
+      {/* Loading enquanto busca clinicId */}
+      {!clinicId && (
+        <div className="flex items-center justify-center py-12">
+          <div className="loading-spinner w-6 h-6 mr-3"></div>
+          <span className="text-secondary-600">Carregando dados da clínica...</span>
+        </div>
+      )}
 
-            {/* Tipo de Indicação */}
-            <div className="mb-6">
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  type="button"
-                  onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
-                  className={`p-4 border-2 rounded-lg transition-all ${
-                    indicatedByType === 'consultant'
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  <UserIcon className="h-8 w-8 mx-auto mb-2 text-primary-600" />
-                  <div className="text-sm font-medium">Consultor Direto</div>
-                  <div className="text-xs text-gray-500 mt-1">100% da comissão</div>
-                </button>
+      {/* Form - só renderiza quando tem clinicId */}
+      {clinicId && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="card max-w-4xl mx-auto"
+        >
+          <form onSubmit={advancedForm.handleSubmit(onAdvancedSubmit)} className="card-body space-y-8">
+            {/* Dados do Lead */}
+            <div>
+              <h3 className="text-lg font-medium text-secondary-900 mb-4">
+                Dados do Lead
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Nome Completo *
+                  </label>
+                  <input
+                    type="text"
+                    id="full_name"
+                    {...advancedForm.register('full_name')}
+                    className={`input ${advancedForm.formState.errors.full_name ? 'input-error' : ''}`}
+                    placeholder="Nome completo do lead"
+                  />
+                  {advancedForm.formState.errors.full_name && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.full_name.message}</p>
+                  )}
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
-                  className={`p-4 border-2 rounded-lg transition-all ${
-                    indicatedByType === 'lead'
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  <CurrencyDollarIcon className="h-8 w-8 mx-auto mb-2 text-success-600" />
-                  <div className="text-sm font-medium">Lead Convertido</div>
-                  <div className="text-xs text-gray-500 mt-1">% editável da comissão</div>
-                </button>
+                <div>
+                  <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Telefone *
+                  </label>
+                  <input
+                    type="tel"
+                    id="phone"
+                    {...advancedForm.register('phone')}
+                    className={`input ${advancedForm.formState.errors.phone ? 'input-error' : ''}`}
+                    placeholder="(11) 99999-9999"
+                  />
+                  {advancedForm.formState.errors.phone && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.phone.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Email (opcional)
+                  </label>
+                  <input
+                    type="email"
+                    id="email"
+                    {...advancedForm.register('email')}
+                    className={`input ${advancedForm.formState.errors.email ? 'input-error' : ''}`}
+                    placeholder="email@exemplo.com"
+                  />
+                  {advancedForm.formState.errors.email && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.email.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Observações (opcional)
+                  </label>
+                  <textarea
+                    id="notes"
+                    {...advancedForm.register('notes')}
+                    rows={3}
+                    className="input"
+                    placeholder="Informações adicionais sobre o lead..."
+                  />
+                </div>
               </div>
             </div>
 
-            {/* Seleção de Consultor */}
-            {indicatedByType === 'consultant' && (
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Selecionar Consultor *
-                </label>
-                <div className="relative mb-4">
-                  <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar consultor por nome ou email..."
-                    className="input pl-10"
-                    value={searchConsultants}
-                    onChange={(e) => setSearchConsultants(e.target.value)}
-                  />
-                </div>
+            {/* Quem Indicou */}
+            <div>
+              <h3 className="text-lg font-medium text-secondary-900 mb-4">
+                Quem Indicou Este Lead?
+              </h3>
 
-                <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
-                  {filteredConsultants.map((consultant) => (
-                    <div
-                      key={consultant.id}
-                      onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
-                      className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                        indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
-                      }`}
-                    >
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <div className="font-medium text-gray-900">{consultant.full_name}</div>
-                          <div className="text-sm text-gray-500">{consultant.email}</div>
-                          <div className="text-xs text-primary-600">{consultant.establishment_name}</div>
-                        </div>
-                        {indicatedById === consultant.id && (
-                          <div className="w-6 h-6 bg-primary-600 rounded-full flex items-center justify-center">
-                            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {filteredConsultants.length === 0 && (
-                    <div className="p-4 text-center text-gray-500">
-                      Nenhum consultor encontrado
-                    </div>
-                  )}
+              {/* Tipo de Indicação */}
+              <div className="mb-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    type="button"
+                    onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
+                    className={`p-4 border-2 rounded-lg transition-all ${
+                      indicatedByType === 'consultant'
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    <UserIcon className="h-8 w-8 mx-auto mb-2 text-primary-600" />
+                    <div className="text-sm font-medium">Consultor Direto</div>
+                    <div className="text-xs text-gray-500 mt-1">100% da comissão</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
+                    className={`p-4 border-2 rounded-lg transition-all ${
+                      indicatedByType === 'lead'
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    <CurrencyDollarIcon className="h-8 w-8 mx-auto mb-2 text-success-600" />
+                    <div className="text-sm font-medium">Lead Convertido</div>
+                    <div className="text-xs text-gray-500 mt-1">% editável da comissão</div>
+                  </button>
                 </div>
               </div>
-            )}
 
-            {/* Seleção de Lead */}
-            {indicatedByType === 'lead' && (
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Selecionar Lead Convertido *
-                </label>
-                <div className="relative mb-4">
-                  <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar lead por nome, telefone ou consultor..."
-                    className="input pl-10"
-                    value={searchLeads}
-                    onChange={(e) => setSearchLeads(e.target.value)}
-                  />
-                </div>
-
-                <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
-                  {filteredLeads.map((lead) => (
-                    <div
-                      key={lead.id}
-                      onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
-                      className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                        indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
-                      }`}
-                    >
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <div className="font-medium text-gray-900">{lead.full_name}</div>
-                          <div className="text-sm text-gray-500">{lead.phone}</div>
-                          <div className="text-xs text-success-600">
-                            Convertido por: {lead.consultant_name}
-                          </div>
-                        </div>
-                        {indicatedById === lead.id && (
-                          <div className="w-6 h-6 bg-success-600 rounded-full flex items-center justify-center">
-                            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {filteredLeads.length === 0 && (
-                    <div className="p-4 text-center text-gray-500">
-                      Nenhum lead convertido encontrado
-                    </div>
-                  )}
-                </div>
-
-                {/* Percentual de Comissão */}
-                {indicatedById && (
-                  <div className="mt-4">
-                    <label className="block text-sm font-medium text-secondary-700 mb-2">
-                      Percentual da Comissão (%)
-                    </label>
+              {/* Seleção de Consultor */}
+              {indicatedByType === 'consultant' && (
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Selecionar Consultor *
+                  </label>
+                  <div className="relative mb-4">
+                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                     <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      {...advancedForm.register('commission_percentage', { valueAsNumber: true })}
-                      className="input w-32"
-                      placeholder="50"
+                      type="text"
+                      placeholder="Buscar consultor por nome ou email..."
+                      className="input pl-10"
+                      value={searchConsultants}
+                      onChange={(e) => setSearchConsultants(e.target.value)}
                     />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Percentual da comissão que será paga ao consultor
-                    </p>
                   </div>
-                )}
-              </div>
-            )}
 
-            {advancedForm.formState.errors.indicated_by_id && (
-              <p className="mt-2 text-sm text-danger-600">{advancedForm.formState.errors.indicated_by_id.message}</p>
-            )}
-          </div>
-
-          {/* Preview da Comissão */}
-          {commissionPreview && (
-            <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-              <h4 className="text-sm font-medium text-primary-900 mb-3">Preview da Comissão</h4>
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <div className="text-gray-600">Valor Base</div>
-                  <div className="font-medium">R$ {commissionPreview.baseValue.toFixed(2)}</div>
+                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                    {filteredConsultants.map((consultant) => (
+                      <div
+                        key={consultant.id}
+                        onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
+                          indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
+                        }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="font-medium text-gray-900">{consultant.full_name}</div>
+                            <div className="text-sm text-gray-500">{consultant.email}</div>
+                            <div className="text-xs text-primary-600">{consultant.establishment_name}</div>
+                          </div>
+                          {indicatedById === consultant.id && (
+                            <div className="w-6 h-6 bg-primary-600 rounded-full flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {filteredConsultants.length === 0 && (
+                      <div className="p-4 text-center text-gray-500">
+                        Nenhum consultor encontrado
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-gray-600">Percentual</div>
-                  <div className="font-medium">{commissionPreview.percentage}%</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Valor Final</div>
-                  <div className="font-bold text-primary-700">R$ {commissionPreview.finalValue.toFixed(2)}</div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
-            <Link href="/dashboard/leads" className="btn btn-secondary">
-              Cancelar
-            </Link>
-            <button
-              type="submit"
-              disabled={isSubmitting || !indicatedById}
-              className="btn btn-primary"
-            >
-              {isSubmitting ? (
-                <>
-                  <div className="loading-spinner w-4 h-4 mr-2"></div>
-                  Salvando...
-                </>
-              ) : (
-                'Cadastrar Lead'
               )}
-            </button>
-          </div>
-        </form>
-      </motion.div>
+
+              {/* Seleção de Lead */}
+              {indicatedByType === 'lead' && (
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Selecionar Lead Convertido *
+                  </label>
+                  <div className="relative mb-4">
+                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar lead por nome, telefone ou consultor..."
+                      className="input pl-10"
+                      value={searchLeads}
+                      onChange={(e) => setSearchLeads(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                    {filteredLeads.map((lead) => (
+                      <div
+                        key={lead.id}
+                        onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
+                          indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
+                        }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="font-medium text-gray-900">{lead.full_name}</div>
+                            <div className="text-sm text-gray-500">{lead.phone}</div>
+                            <div className="text-xs text-success-600">
+                              Convertido por: {lead.consultant_name}
+                            </div>
+                          </div>
+                          {indicatedById === lead.id && (
+                            <div className="w-6 h-6 bg-success-600 rounded-full flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {filteredLeads.length === 0 && (
+                      <div className="p-4 text-center text-gray-500">
+                        Nenhum lead convertido encontrado
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Percentual de Comissão */}
+                  {indicatedById && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Percentual da Comissão (%)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        {...advancedForm.register('commission_percentage', { valueAsNumber: true })}
+                        className="input w-32"
+                        placeholder="50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Percentual da comissão que será paga ao consultor
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {advancedForm.formState.errors.indicated_by_id && (
+                <p className="mt-2 text-sm text-danger-600">{advancedForm.formState.errors.indicated_by_id.message}</p>
+              )}
+            </div>
+
+            {/* Preview da Comissão */}
+            {commissionPreview && (
+              <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-primary-900 mb-3">Preview da Comissão</h4>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <div className="text-gray-600">Valor Base</div>
+                    <div className="font-medium">R$ {commissionPreview.baseValue.toFixed(2)}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-600">Percentual</div>
+                    <div className="font-medium">{commissionPreview.percentage}%</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-600">Valor Final</div>
+                    <div className="font-bold text-primary-700">R$ {commissionPreview.finalValue.toFixed(2)}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
+              <Link href="/dashboard/leads" className="btn btn-secondary">
+                Cancelar
+              </Link>
+              <button
+                type="submit"
+                disabled={isSubmitting || !indicatedById}
+                className="btn btn-primary"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="loading-spinner w-4 h-4 mr-2"></div>
+                    Salvando...
+                  </>
+                ) : (
+                  'Cadastrar Lead'
+                )}
+              </button>
+            </div>
+          </form>
+        </motion.div>
+      )}
     </div>
   )
 }
