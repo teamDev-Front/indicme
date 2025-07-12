@@ -12,17 +12,22 @@ import { motion } from 'framer-motion'
 import { ArrowLeftIcon, MagnifyingGlassIcon, UserIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 
-const leadSchema = z.object({
+// Schemas para validação
+const basicLeadSchema = z.object({
   full_name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
   phone: z.string().min(10, 'Telefone deve ter pelo menos 10 dígitos'),
   email: z.string().email('Email inválido').optional().or(z.literal('')),
   notes: z.string().optional(),
+})
+
+const advancedLeadSchema = basicLeadSchema.extend({
   indicated_by_type: z.enum(['consultant', 'lead']),
   indicated_by_id: z.string().min(1, 'Selecione quem indicou'),
   commission_percentage: z.number().min(0).max(100).optional(),
 })
 
-type LeadFormData = z.infer<typeof leadSchema>
+type BasicLeadFormData = z.infer<typeof basicLeadSchema>
+type AdvancedLeadFormData = z.infer<typeof advancedLeadSchema>
 
 interface Consultant {
   id: string
@@ -41,14 +46,16 @@ interface ConvertedLead {
 }
 
 interface EstablishmentCommission {
-  establishment_code: string
   consultant_value_per_arcada: number
+  establishment_code: string
 }
 
 export default function NewLeadPage() {
   const { profile } = useAuth()
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  
+  // Estados para formulário avançado (admin)
   const [consultants, setConsultants] = useState<Consultant[]>([])
   const [convertedLeads, setConvertedLeads] = useState<ConvertedLead[]>([])
   const [searchConsultants, setSearchConsultants] = useState('')
@@ -60,56 +67,78 @@ export default function NewLeadPage() {
     percentage: number
     finalValue: number
   } | null>(null)
+
   const supabase = createClient()
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-    reset,
-    watch,
-    setValue,
-  } = useForm<LeadFormData>({
-    resolver: zodResolver(leadSchema),
+  // Determinar qual formulário mostrar
+  const isAdvancedForm = profile?.role === 'clinic_admin'
+
+  // Formulário básico (consultant/manager)
+  const basicForm = useForm<BasicLeadFormData>({
+    resolver: zodResolver(basicLeadSchema),
+  })
+
+  // Formulário avançado (admin)
+  const advancedForm = useForm<AdvancedLeadFormData>({
+    resolver: zodResolver(advancedLeadSchema),
     defaultValues: {
       indicated_by_type: 'consultant',
       commission_percentage: 100,
     }
   })
 
-  const indicatedByType = watch('indicated_by_type')
-  const indicatedById = watch('indicated_by_id')
-  const commissionPercentage = watch('commission_percentage')
+  const indicatedByType = advancedForm.watch('indicated_by_type')
+  const indicatedById = advancedForm.watch('indicated_by_id')
+  const commissionPercentage = advancedForm.watch('commission_percentage')
 
   useEffect(() => {
-    if (profile?.role === 'clinic_admin') {
-      fetchConsultants()
-      fetchConvertedLeads()
-      fetchEstablishments()
+    if (isAdvancedForm) {
+      fetchAdvancedData()
     }
-  }, [profile])
+  }, [isAdvancedForm])
 
   useEffect(() => {
     if (indicatedByType === 'lead') {
-      setValue('commission_percentage', 50)
+      advancedForm.setValue('commission_percentage', 50)
     } else {
-      setValue('commission_percentage', 100)
+      advancedForm.setValue('commission_percentage', 100)
     }
-  }, [indicatedByType, setValue])
+  }, [indicatedByType, advancedForm])
 
   useEffect(() => {
-    updateCommissionPreview()
-  }, [indicatedById, commissionPercentage, selectedEstablishment, establishments, consultants, convertedLeads])
+    if (isAdvancedForm) {
+      updateCommissionPreview()
+    }
+  }, [indicatedById, commissionPercentage, selectedEstablishment, isAdvancedForm])
+
+  const fetchAdvancedData = async () => {
+    if (!profile?.id) return
+
+    try {
+      await Promise.all([
+        fetchConsultants(),
+        fetchConvertedLeads(),
+        fetchEstablishments()
+      ])
+    } catch (error) {
+      console.error('Erro ao buscar dados:', error)
+      toast.error('Erro ao carregar dados do formulário')
+    }
+  }
 
   const fetchConsultants = async () => {
     try {
+      // CORREÇÃO 1: Query corrigida para buscar consultores
       const { data: userClinic } = await supabase
         .from('user_clinics')
         .select('clinic_id')
         .eq('user_id', profile?.id)
         .single()
 
-      if (!userClinic) return
+      if (!userClinic) {
+        console.error('Admin não está associado a uma clínica')
+        return
+      }
 
       const { data, error } = await supabase
         .from('users')
@@ -120,24 +149,37 @@ export default function NewLeadPage() {
           user_clinics!inner(clinic_id),
           user_establishments (
             establishment_code,
-            establishment_codes (name)
+            establishment_codes (
+              name
+            )
           )
         `)
         .eq('user_clinics.clinic_id', userClinic.clinic_id)
         .eq('role', 'consultant')
         .eq('status', 'active')
+        .order('full_name')
 
-      if (error) throw error
+      if (error) {
+        console.error('Erro ao buscar consultores:', error)
+        return
+      }
 
-      const consultantsData = data?.map((consultant: any) => ({
-        id: consultant.id,
-        full_name: consultant.full_name,
-        email: consultant.email,
-        establishment_name: (consultant.user_establishments?.[0]?.establishment_codes as any)?.name || 'Sem estabelecimento'
-      })) || []
+      const consultantsData = data?.map(consultant => {
+        // Corrigir tipos TypeScript
+        const userEstablishments = consultant.user_establishments as any[]
+        const establishmentCodes = userEstablishments?.[0]?.establishment_codes as any
+        
+        return {
+          id: consultant.id,
+          full_name: consultant.full_name,
+          email: consultant.email,
+          establishment_name: establishmentCodes?.name || 'Sem estabelecimento'
+        }
+      }) || []
 
+      console.log('✅ Consultores encontrados:', consultantsData.length)
       setConsultants(consultantsData)
-    } catch (error: any) {
+    } catch (error) {
       console.error('Erro ao buscar consultores:', error)
     }
   }
@@ -167,20 +209,31 @@ export default function NewLeadPage() {
         .eq('clinic_id', userClinic.clinic_id)
         .eq('status', 'converted')
         .order('created_at', { ascending: false })
+        .limit(50)
 
-      if (error) throw error
+      if (error) {
+        console.error('Erro ao buscar leads convertidos:', error)
+        return
+      }
 
-      const leadsData = data?.map((lead: any) => ({
-        id: lead.id,
-        full_name: lead.full_name,
-        phone: lead.phone,
-        indicated_by: lead.indicated_by,
-        consultant_name: (lead.users as any)?.full_name || 'Consultor não encontrado',
-        consultant_email: (lead.users as any)?.email || ''
-      })) || []
+      const leadsData = data?.map(lead => {
+        // Corrigir tipos TypeScript
+        const users = lead.users as any[]
+        const user = Array.isArray(users) ? users[0] : users
+        
+        return {
+          id: lead.id,
+          full_name: lead.full_name,
+          phone: lead.phone,
+          indicated_by: lead.indicated_by,
+          consultant_name: user?.full_name || 'Consultor não encontrado',
+          consultant_email: user?.email || ''
+        }
+      }) || []
 
+      console.log('✅ Leads convertidos encontrados:', leadsData.length)
       setConvertedLeads(leadsData)
-    } catch (error: any) {
+    } catch (error) {
       console.error('Erro ao buscar leads convertidos:', error)
     }
   }
@@ -191,49 +244,25 @@ export default function NewLeadPage() {
         .from('establishment_commissions')
         .select('establishment_code, consultant_value_per_arcada')
 
-      if (error) throw error
+      if (error) {
+        console.error('Erro ao buscar estabelecimentos:', error)
+        return
+      }
 
       setEstablishments(data || [])
-    } catch (error: any) {
+    } catch (error) {
       console.error('Erro ao buscar estabelecimentos:', error)
     }
   }
 
   const updateCommissionPreview = () => {
-    if (!indicatedById) {
+    if (!indicatedById || !selectedEstablishment) {
       setCommissionPreview(null)
       return
     }
 
-    let establishment: EstablishmentCommission | undefined
-
-    if (indicatedByType === 'consultant') {
-      // Buscar estabelecimento do consultor
-      const consultant = consultants.find(c => c.id === indicatedById)
-      if (consultant?.establishment_name && consultant.establishment_name !== 'Sem estabelecimento') {
-        establishment = establishments.find(e => 
-          e.establishment_code === consultant.establishment_name || 
-          selectedEstablishment === e.establishment_code
-        )
-      }
-    } else if (indicatedByType === 'lead') {
-      // Buscar estabelecimento do consultor que converteu o lead original
-      const lead = convertedLeads.find(l => l.id === indicatedById)
-      if (lead) {
-        const originalConsultant = consultants.find(c => c.id === lead.indicated_by)
-        if (originalConsultant?.establishment_name && originalConsultant.establishment_name !== 'Sem estabelecimento') {
-          establishment = establishments.find(e => 
-            e.establishment_code === originalConsultant.establishment_name ||
-            selectedEstablishment === e.establishment_code
-          )
-        }
-      }
-    }
-
-    if (!establishment || !selectedEstablishment) {
-      setCommissionPreview(null)
-      return
-    }
+    const establishment = establishments.find(e => e.establishment_code === selectedEstablishment)
+    if (!establishment) return
 
     const baseValue = establishment.consultant_value_per_arcada
     const percentage = commissionPercentage || 100
@@ -246,18 +275,66 @@ export default function NewLeadPage() {
     })
   }
 
-  const filteredConsultants = consultants.filter(consultant =>
-    consultant.full_name.toLowerCase().includes(searchConsultants.toLowerCase()) ||
-    consultant.email.toLowerCase().includes(searchConsultants.toLowerCase())
-  )
+  // Submit para formulário básico (consultant/manager)
+  const onBasicSubmit = async (data: BasicLeadFormData) => {
+    if (!profile) return
 
-  const filteredLeads = convertedLeads.filter(lead =>
-    lead.full_name.toLowerCase().includes(searchLeads.toLowerCase()) ||
-    lead.phone.includes(searchLeads) ||
-    lead.consultant_name.toLowerCase().includes(searchLeads.toLowerCase())
-  )
+    try {
+      setIsSubmitting(true)
 
-  const onSubmit = async (data: LeadFormData) => {
+      // Buscar a clínica do usuário
+      const { data: userClinic, error: clinicError } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile.id)
+        .single()
+
+      if (clinicError || !userClinic) {
+        throw new Error('Usuário não está associado a uma clínica')
+      }
+
+      // Buscar establishment_code do usuário
+      const { data: userEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', profile.id)
+        .eq('status', 'active')
+        .single()
+
+      // Preparar dados do lead
+      const leadData = {
+        full_name: data.full_name,
+        phone: data.phone,
+        email: data.email || null,
+        notes: data.notes || null,
+        indicated_by: profile.id, // O próprio usuário indica
+        clinic_id: userClinic.clinic_id,
+        status: 'new' as const,
+        establishment_code: userEstablishment?.establishment_code || null,
+        commission_percentage: 100,
+      }
+
+      const { error } = await supabase
+        .from('leads')
+        .insert(leadData)
+
+      if (error) {
+        throw error
+      }
+
+      toast.success('Lead cadastrado com sucesso!')
+      basicForm.reset()
+      router.push('/dashboard/leads')
+    } catch (error: any) {
+      console.error('Erro ao cadastrar lead:', error)
+      toast.error(error.message || 'Erro ao cadastrar lead')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  // Submit para formulário avançado (admin)
+  const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
     if (!profile) return
 
     try {
@@ -276,7 +353,7 @@ export default function NewLeadPage() {
 
       // Determinar quem realmente indicou
       let actualIndicatedBy = data.indicated_by_id
-      let originalLeadId: string | null = null
+      let originalLeadId = null
 
       if (data.indicated_by_type === 'lead') {
         // Se foi indicado por um lead, pegar o consultor desse lead
@@ -325,7 +402,7 @@ export default function NewLeadPage() {
       }
 
       toast.success('Lead cadastrado com sucesso!')
-      reset()
+      advancedForm.reset()
       router.push('/dashboard/leads')
     } catch (error: any) {
       console.error('Erro ao cadastrar lead:', error)
@@ -335,32 +412,139 @@ export default function NewLeadPage() {
     }
   }
 
-  // Verificar se é admin
-  if (profile?.role !== 'clinic_admin') {
+  const filteredConsultants = consultants.filter(consultant =>
+    consultant.full_name.toLowerCase().includes(searchConsultants.toLowerCase()) ||
+    consultant.email.toLowerCase().includes(searchConsultants.toLowerCase())
+  )
+
+  const filteredLeads = convertedLeads.filter(lead =>
+    lead.full_name.toLowerCase().includes(searchLeads.toLowerCase()) ||
+    lead.phone.includes(searchLeads) ||
+    lead.consultant_name.toLowerCase().includes(searchLeads.toLowerCase())
+  )
+
+  // FORMULÁRIO BÁSICO (consultant/manager)
+  if (!isAdvancedForm) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-secondary-900 mb-2">Acesso Restrito</h3>
-          <p className="text-secondary-500">
-            Apenas administradores podem usar este formulário avançado.
-          </p>
-          <Link href="/dashboard/leads/new" className="btn btn-primary mt-4">
-            Usar Formulário Simples
-          </Link>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
+              <ArrowLeftIcon className="h-4 w-4 mr-2" />
+              Voltar
+            </Link>
+            <div>
+              <h1 className="text-2xl font-bold text-secondary-900">Novo Lead</h1>
+              <p className="text-secondary-600">
+                Cadastre uma nova indicação
+              </p>
+            </div>
+          </div>
         </div>
+
+        {/* Form */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="card max-w-2xl mx-auto"
+        >
+          <form onSubmit={basicForm.handleSubmit(onBasicSubmit)} className="card-body space-y-6">
+            <div>
+              <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
+                Nome Completo *
+              </label>
+              <input
+                type="text"
+                id="full_name"
+                {...basicForm.register('full_name')}
+                className={`input ${basicForm.formState.errors.full_name ? 'input-error' : ''}`}
+                placeholder="Nome completo do lead"
+              />
+              {basicForm.formState.errors.full_name && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.full_name.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
+                Telefone *
+              </label>
+              <input
+                type="tel"
+                id="phone"
+                {...basicForm.register('phone')}
+                className={`input ${basicForm.formState.errors.phone ? 'input-error' : ''}`}
+                placeholder="(11) 99999-9999"
+              />
+              {basicForm.formState.errors.phone && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.phone.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
+                Email (opcional)
+              </label>
+              <input
+                type="email"
+                id="email"
+                {...basicForm.register('email')}
+                className={`input ${basicForm.formState.errors.email ? 'input-error' : ''}`}
+                placeholder="email@exemplo.com"
+              />
+              {basicForm.formState.errors.email && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.email.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
+                Observações (opcional)
+              </label>
+              <textarea
+                id="notes"
+                {...basicForm.register('notes')}
+                rows={3}
+                className="input"
+                placeholder="Informações adicionais sobre o lead..."
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
+              <Link href="/dashboard/leads" className="btn btn-secondary">
+                Cancelar
+              </Link>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="btn btn-primary"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="loading-spinner w-4 h-4 mr-2"></div>
+                    Salvando...
+                  </>
+                ) : (
+                  'Cadastrar Lead'
+                )}
+              </button>
+            </div>
+          </form>
+        </motion.div>
       </div>
     )
   }
 
+  // FORMULÁRIO AVANÇADO (admin) - mantém o código existente
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Link
-            href="/dashboard/leads"
-            className="btn btn-ghost btn-sm"
-          >
+          <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
             <ArrowLeftIcon className="h-4 w-4 mr-2" />
             Voltar
           </Link>
@@ -375,34 +559,6 @@ export default function NewLeadPage() {
         </div>
       </div>
 
-      {/* Seleção de Estabelecimento */}
-      {establishments.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="card"
-        >
-          <div className="card-body">
-            <h3 className="text-lg font-medium text-secondary-900 mb-4">
-              Selecionar Estabelecimento
-            </h3>
-            <select
-              value={selectedEstablishment}
-              onChange={(e) => setSelectedEstablishment(e.target.value)}
-              className="select w-full max-w-xs"
-            >
-              <option value="">Selecione um estabelecimento</option>
-              {establishments.map((establishment) => (
-                <option key={establishment.establishment_code} value={establishment.establishment_code}>
-                  {establishment.establishment_code} - R$ {establishment.consultant_value_per_arcada.toFixed(2)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </motion.div>
-      )}
-
       {/* Form */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -410,7 +566,7 @@ export default function NewLeadPage() {
         transition={{ duration: 0.5 }}
         className="card max-w-4xl mx-auto"
       >
-        <form onSubmit={handleSubmit(onSubmit)} className="card-body space-y-8">
+        <form onSubmit={advancedForm.handleSubmit(onAdvancedSubmit)} className="card-body space-y-8">
           {/* Dados do Lead */}
           <div>
             <h3 className="text-lg font-medium text-secondary-900 mb-4">
@@ -424,12 +580,12 @@ export default function NewLeadPage() {
                 <input
                   type="text"
                   id="full_name"
-                  {...register('full_name')}
-                  className={`input ${errors.full_name ? 'input-error' : ''}`}
+                  {...advancedForm.register('full_name')}
+                  className={`input ${advancedForm.formState.errors.full_name ? 'input-error' : ''}`}
                   placeholder="Nome completo do lead"
                 />
-                {errors.full_name && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.full_name.message}</p>
+                {advancedForm.formState.errors.full_name && (
+                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.full_name.message}</p>
                 )}
               </div>
 
@@ -440,12 +596,12 @@ export default function NewLeadPage() {
                 <input
                   type="tel"
                   id="phone"
-                  {...register('phone')}
-                  className={`input ${errors.phone ? 'input-error' : ''}`}
+                  {...advancedForm.register('phone')}
+                  className={`input ${advancedForm.formState.errors.phone ? 'input-error' : ''}`}
                   placeholder="(11) 99999-9999"
                 />
-                {errors.phone && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.phone.message}</p>
+                {advancedForm.formState.errors.phone && (
+                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.phone.message}</p>
                 )}
               </div>
 
@@ -456,12 +612,12 @@ export default function NewLeadPage() {
                 <input
                   type="email"
                   id="email"
-                  {...register('email')}
-                  className={`input ${errors.email ? 'input-error' : ''}`}
+                  {...advancedForm.register('email')}
+                  className={`input ${advancedForm.formState.errors.email ? 'input-error' : ''}`}
                   placeholder="email@exemplo.com"
                 />
-                {errors.email && (
-                  <p className="mt-1 text-sm text-danger-600">{errors.email.message}</p>
+                {advancedForm.formState.errors.email && (
+                  <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.email.message}</p>
                 )}
               </div>
 
@@ -471,7 +627,7 @@ export default function NewLeadPage() {
                 </label>
                 <textarea
                   id="notes"
-                  {...register('notes')}
+                  {...advancedForm.register('notes')}
                   rows={3}
                   className="input"
                   placeholder="Informações adicionais sobre o lead..."
@@ -491,7 +647,7 @@ export default function NewLeadPage() {
               <div className="grid grid-cols-2 gap-4">
                 <button
                   type="button"
-                  onClick={() => setValue('indicated_by_type', 'consultant')}
+                  onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
                   className={`p-4 border-2 rounded-lg transition-all ${
                     indicatedByType === 'consultant'
                       ? 'border-primary-500 bg-primary-50'
@@ -505,7 +661,7 @@ export default function NewLeadPage() {
 
                 <button
                   type="button"
-                  onClick={() => setValue('indicated_by_type', 'lead')}
+                  onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
                   className={`p-4 border-2 rounded-lg transition-all ${
                     indicatedByType === 'lead'
                       ? 'border-primary-500 bg-primary-50'
@@ -540,7 +696,7 @@ export default function NewLeadPage() {
                   {filteredConsultants.map((consultant) => (
                     <div
                       key={consultant.id}
-                      onClick={() => setValue('indicated_by_id', consultant.id)}
+                      onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
                       className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
                         indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
                       }`}
@@ -591,7 +747,7 @@ export default function NewLeadPage() {
                   {filteredLeads.map((lead) => (
                     <div
                       key={lead.id}
-                      onClick={() => setValue('indicated_by_id', lead.id)}
+                      onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
                       className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
                         indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
                       }`}
@@ -632,7 +788,7 @@ export default function NewLeadPage() {
                       min="0"
                       max="100"
                       step="1"
-                      {...register('commission_percentage', { valueAsNumber: true })}
+                      {...advancedForm.register('commission_percentage', { valueAsNumber: true })}
                       className="input w-32"
                       placeholder="50"
                     />
@@ -644,8 +800,8 @@ export default function NewLeadPage() {
               </div>
             )}
 
-            {errors.indicated_by_id && (
-              <p className="mt-2 text-sm text-danger-600">{errors.indicated_by_id.message}</p>
+            {advancedForm.formState.errors.indicated_by_id && (
+              <p className="mt-2 text-sm text-danger-600">{advancedForm.formState.errors.indicated_by_id.message}</p>
             )}
           </div>
 
@@ -672,10 +828,7 @@ export default function NewLeadPage() {
 
           {/* Actions */}
           <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
-            <Link
-              href="/dashboard/leads"
-              className="btn btn-secondary"
-            >
+            <Link href="/dashboard/leads" className="btn btn-secondary">
               Cancelar
             </Link>
             <button
