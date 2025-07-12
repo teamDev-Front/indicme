@@ -105,12 +105,12 @@ export default function IndicationSelector({
 
       if (error) throw error
 
-      const consultantsData = data?.map(consultant => ({
+      const consultantsData = data?.map((consultant: any) => ({
         id: consultant.id,
         full_name: consultant.full_name,
         email: consultant.email,
-        establishment_name: consultant.user_establishments?.[0]?.establishment_code?.name || 'Sem estabelecimento',
-        establishment_code: consultant.user_establishments?.[0]?.establishment_code?.code
+        establishment_name: (consultant.user_establishments?.[0]?.establishment_codes as any)?.name || 'Sem estabelecimento',
+        establishment_code: (consultant.user_establishments?.[0]?.establishment_codes as any)?.code
       })) || []
 
       setConsultants(consultantsData)
@@ -141,13 +141,13 @@ export default function IndicationSelector({
 
       if (error) throw error
 
-      const leadsData = data?.map(lead => ({
+      const leadsData = data?.map((lead: any) => ({
         id: lead.id,
         full_name: lead.full_name,
         phone: lead.phone,
         indicated_by: lead.indicated_by,
-        consultant_name: lead.users?.[0]?.full_name || 'Consultor não encontrado',
-        consultant_email: lead.users?.[0]?.email || '',
+        consultant_name: (lead.users as any)?.full_name || 'Consultor não encontrado',
+        consultant_email: (lead.users as any)?.email || '',
         establishment_code: lead.establishment_code
       })) || []
 

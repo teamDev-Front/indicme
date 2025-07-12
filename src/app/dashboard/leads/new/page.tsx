@@ -41,8 +41,8 @@ interface ConvertedLead {
 }
 
 interface EstablishmentCommission {
-  consultant_value_per_arcada: number
   establishment_code: string
+  consultant_value_per_arcada: number
 }
 
 export default function NewLeadPage() {
@@ -99,7 +99,7 @@ export default function NewLeadPage() {
 
   useEffect(() => {
     updateCommissionPreview()
-  }, [indicatedById, commissionPercentage, selectedEstablishment])
+  }, [indicatedById, commissionPercentage, selectedEstablishment, establishments, consultants, convertedLeads])
 
   const fetchConsultants = async () => {
     try {
@@ -129,11 +129,11 @@ export default function NewLeadPage() {
 
       if (error) throw error
 
-      const consultantsData = data?.map(consultant => ({
+      const consultantsData = data?.map((consultant: any) => ({
         id: consultant.id,
         full_name: consultant.full_name,
         email: consultant.email,
-        establishment_name: consultant.user_establishments?.[0]?.establishment_code?.name || 'Sem estabelecimento'
+        establishment_name: (consultant.user_establishments?.[0]?.establishment_codes as any)?.name || 'Sem estabelecimento'
       })) || []
 
       setConsultants(consultantsData)
@@ -170,13 +170,13 @@ export default function NewLeadPage() {
 
       if (error) throw error
 
-      const leadsData = data?.map(lead => ({
+      const leadsData = data?.map((lead: any) => ({
         id: lead.id,
         full_name: lead.full_name,
         phone: lead.phone,
         indicated_by: lead.indicated_by,
-        consultant_name: lead.users?.[0]?.full_name || 'Consultor não encontrado',
-        consultant_email: lead.users?.[0]?.email || ''
+        consultant_name: (lead.users as any)?.full_name || 'Consultor não encontrado',
+        consultant_email: (lead.users as any)?.email || ''
       })) || []
 
       setConvertedLeads(leadsData)
@@ -200,13 +200,40 @@ export default function NewLeadPage() {
   }
 
   const updateCommissionPreview = () => {
-    if (!indicatedById || !selectedEstablishment) {
+    if (!indicatedById) {
       setCommissionPreview(null)
       return
     }
 
-    const establishment = establishments.find(e => e.establishment_code === selectedEstablishment)
-    if (!establishment) return
+    let establishment: EstablishmentCommission | undefined
+
+    if (indicatedByType === 'consultant') {
+      // Buscar estabelecimento do consultor
+      const consultant = consultants.find(c => c.id === indicatedById)
+      if (consultant?.establishment_name && consultant.establishment_name !== 'Sem estabelecimento') {
+        establishment = establishments.find(e => 
+          e.establishment_code === consultant.establishment_name || 
+          selectedEstablishment === e.establishment_code
+        )
+      }
+    } else if (indicatedByType === 'lead') {
+      // Buscar estabelecimento do consultor que converteu o lead original
+      const lead = convertedLeads.find(l => l.id === indicatedById)
+      if (lead) {
+        const originalConsultant = consultants.find(c => c.id === lead.indicated_by)
+        if (originalConsultant?.establishment_name && originalConsultant.establishment_name !== 'Sem estabelecimento') {
+          establishment = establishments.find(e => 
+            e.establishment_code === originalConsultant.establishment_name ||
+            selectedEstablishment === e.establishment_code
+          )
+        }
+      }
+    }
+
+    if (!establishment || !selectedEstablishment) {
+      setCommissionPreview(null)
+      return
+    }
 
     const baseValue = establishment.consultant_value_per_arcada
     const percentage = commissionPercentage || 100
@@ -249,7 +276,7 @@ export default function NewLeadPage() {
 
       // Determinar quem realmente indicou
       let actualIndicatedBy = data.indicated_by_id
-      let originalLeadId = null
+      let originalLeadId: string | null = null
 
       if (data.indicated_by_type === 'lead') {
         // Se foi indicado por um lead, pegar o consultor desse lead
@@ -347,6 +374,34 @@ export default function NewLeadPage() {
           </div>
         </div>
       </div>
+
+      {/* Seleção de Estabelecimento */}
+      {establishments.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="card"
+        >
+          <div className="card-body">
+            <h3 className="text-lg font-medium text-secondary-900 mb-4">
+              Selecionar Estabelecimento
+            </h3>
+            <select
+              value={selectedEstablishment}
+              onChange={(e) => setSelectedEstablishment(e.target.value)}
+              className="select w-full max-w-xs"
+            >
+              <option value="">Selecione um estabelecimento</option>
+              {establishments.map((establishment) => (
+                <option key={establishment.establishment_code} value={establishment.establishment_code}>
+                  {establishment.establishment_code} - R$ {establishment.consultant_value_per_arcada.toFixed(2)}
+                </option>
+              ))}
+            </select>
+          </div>
+        </motion.div>
+      )}
 
       {/* Form */}
       <motion.div
