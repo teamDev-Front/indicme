@@ -162,20 +162,16 @@ export default function NewLeadPage() {
     }
   }
 
+  // Substituir a função fetchConsultants no arquivo src/app/dashboard/leads/new/page.tsx
+
   const fetchConsultants = async () => {
     try {
-      console.log('🔍 Buscando consultores para clínica:', clinicId)
+      console.log('🔍 Buscando TODOS os consultores da base...')
 
-      // CORREÇÃO: Query mais simples e direta
+      // Query simples: buscar TODOS os consultores
       const { data, error } = await supabase
         .from('users')
-        .select(`
-        id,
-        full_name,
-        email,
-        user_clinics!inner(clinic_id)
-      `)
-        .eq('user_clinics.clinic_id', clinicId)
+        .select('id, full_name, email')
         .eq('role', 'consultant')
         .eq('status', 'active')
         .order('full_name')
@@ -185,72 +181,31 @@ export default function NewLeadPage() {
         return
       }
 
-      console.log('✅ Consultores base encontrados:', data?.length || 0)
+      console.log('✅ Consultores encontrados:', data?.length || 0)
 
       if (!data || data.length === 0) {
-        console.log('⚠️ Nenhum consultor encontrado para a clínica')
+        console.log('⚠️ Nenhum consultor encontrado')
         setConsultants([])
         return
       }
 
-      // Para cada consultor, buscar seu estabelecimento
-      const consultantsWithEstablishments = await Promise.all(
-        data.map(async (consultant) => {
-          try {
-            // Buscar estabelecimento do consultor
-            const { data: userEst } = await supabase
-              .from('user_establishments')
-              .select(`
-              establishment_code,
-              establishment_codes (
-                code,
-                name
-              )
-            `)
-              .eq('user_id', consultant.id)
-              .eq('status', 'active')
-              .maybeSingle()
+      // Mapear para o formato esperado
+      const consultantsData = data.map(consultant => ({
+        id: consultant.id,
+        full_name: consultant.full_name,
+        email: consultant.email,
+        establishment_name: 'Consultor' // Placeholder simples
+      }))
 
-            let establishmentName = 'Sem estabelecimento'
-
-            if (userEst?.establishment_codes) {
-              // A establishment_codes pode ser um objeto ou array
-              const estData = Array.isArray(userEst.establishment_codes)
-                ? userEst.establishment_codes[0]
-                : userEst.establishment_codes
-
-              establishmentName = estData?.name || `Código: ${userEst.establishment_code}`
-            }
-
-            console.log(`👤 Consultor: ${consultant.full_name} - Estabelecimento: ${establishmentName}`)
-
-            return {
-              id: consultant.id,
-              full_name: consultant.full_name,
-              email: consultant.email,
-              establishment_name: establishmentName,
-            }
-          } catch (error) {
-            console.warn(`⚠️ Erro ao buscar estabelecimento para ${consultant.full_name}:`, error)
-            // Mesmo com erro, incluir o consultor
-            return {
-              id: consultant.id,
-              full_name: consultant.full_name,
-              email: consultant.email,
-              establishment_name: 'Erro ao carregar estabelecimento',
-            }
-          }
-        })
-      )
-
-      console.log('✅ Total de consultores processados:', consultantsWithEstablishments.length)
-      setConsultants(consultantsWithEstablishments)
+      console.log('✅ Consultores mapeados:', consultantsData.length)
+      setConsultants(consultantsData)
 
     } catch (error) {
       console.error('❌ Erro geral ao buscar consultores:', error)
       setConsultants([])
     }
   }
+  
   const fetchConvertedLeads = async () => {
     try {
       const { data, error } = await supabase
