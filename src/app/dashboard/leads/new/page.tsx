@@ -55,7 +55,7 @@ export default function NewLeadPage() {
   const { profile } = useAuth()
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  
+
   // Estados para formulário avançado (admin)
   const [consultants, setConsultants] = useState<Consultant[]>([])
   const [convertedLeads, setConvertedLeads] = useState<ConvertedLead[]>([])
@@ -68,7 +68,7 @@ export default function NewLeadPage() {
     percentage: number
     finalValue: number
   } | null>(null)
-  
+
   // 🔧 CORREÇÃO: Adicionar estado para clinicId
   const [clinicId, setClinicId] = useState<string>('')
 
@@ -126,7 +126,7 @@ export default function NewLeadPage() {
   const fetchClinicId = async () => {
     try {
       console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
-      
+
       const { data: userClinic, error } = await supabase
         .from('user_clinics')
         .select('clinic_id')
@@ -165,52 +165,92 @@ export default function NewLeadPage() {
   const fetchConsultants = async () => {
     try {
       console.log('🔍 Buscando consultores para clínica:', clinicId)
-      
-      // CORREÇÃO 1: Query corrigida para buscar consultores
+
+      // CORREÇÃO: Query mais simples e direta
       const { data, error } = await supabase
         .from('users')
         .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id),
-          user_establishments (
-            establishment_code,
-            establishment_codes (
-              name
-            )
-          )
-        `)
+        id,
+        full_name,
+        email,
+        user_clinics!inner(clinic_id)
+      `)
         .eq('user_clinics.clinic_id', clinicId)
         .eq('role', 'consultant')
         .eq('status', 'active')
         .order('full_name')
 
       if (error) {
-        console.error('Erro ao buscar consultores:', error)
+        console.error('❌ Erro ao buscar consultores:', error)
         return
       }
 
-      const consultantsData = data?.map(consultant => {
-        // Corrigir tipos TypeScript
-        const userEstablishments = consultant.user_establishments as any[]
-        const establishmentCodes = userEstablishments?.[0]?.establishment_codes as any
-        
-        return {
-          id: consultant.id,
-          full_name: consultant.full_name,
-          email: consultant.email,
-          establishment_name: establishmentCodes?.name || 'Sem estabelecimento'
-        }
-      }) || []
+      console.log('✅ Consultores base encontrados:', data?.length || 0)
 
-      console.log('✅ Consultores encontrados:', consultantsData.length)
-      setConsultants(consultantsData)
+      if (!data || data.length === 0) {
+        console.log('⚠️ Nenhum consultor encontrado para a clínica')
+        setConsultants([])
+        return
+      }
+
+      // Para cada consultor, buscar seu estabelecimento
+      const consultantsWithEstablishments = await Promise.all(
+        data.map(async (consultant) => {
+          try {
+            // Buscar estabelecimento do consultor
+            const { data: userEst } = await supabase
+              .from('user_establishments')
+              .select(`
+              establishment_code,
+              establishment_codes (
+                code,
+                name
+              )
+            `)
+              .eq('user_id', consultant.id)
+              .eq('status', 'active')
+              .maybeSingle()
+
+            let establishmentName = 'Sem estabelecimento'
+
+            if (userEst?.establishment_codes) {
+              // A establishment_codes pode ser um objeto ou array
+              const estData = Array.isArray(userEst.establishment_codes)
+                ? userEst.establishment_codes[0]
+                : userEst.establishment_codes
+
+              establishmentName = estData?.name || `Código: ${userEst.establishment_code}`
+            }
+
+            console.log(`👤 Consultor: ${consultant.full_name} - Estabelecimento: ${establishmentName}`)
+
+            return {
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
+              establishment_name: establishmentName,
+            }
+          } catch (error) {
+            console.warn(`⚠️ Erro ao buscar estabelecimento para ${consultant.full_name}:`, error)
+            // Mesmo com erro, incluir o consultor
+            return {
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
+              establishment_name: 'Erro ao carregar estabelecimento',
+            }
+          }
+        })
+      )
+
+      console.log('✅ Total de consultores processados:', consultantsWithEstablishments.length)
+      setConsultants(consultantsWithEstablishments)
+
     } catch (error) {
-      console.error('Erro ao buscar consultores:', error)
+      console.error('❌ Erro geral ao buscar consultores:', error)
+      setConsultants([])
     }
   }
-
   const fetchConvertedLeads = async () => {
     try {
       const { data, error } = await supabase
@@ -239,7 +279,7 @@ export default function NewLeadPage() {
         // Corrigir tipos TypeScript
         const users = lead.users as any[]
         const user = Array.isArray(users) ? users[0] : users
-        
+
         return {
           id: lead.id,
           full_name: lead.full_name,
@@ -675,11 +715,10 @@ export default function NewLeadPage() {
                   <button
                     type="button"
                     onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
-                    className={`p-4 border-2 rounded-lg transition-all ${
-                      indicatedByType === 'consultant'
+                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'consultant'
                         ? 'border-primary-500 bg-primary-50'
                         : 'border-gray-300 hover:border-gray-400'
-                    }`}
+                      }`}
                   >
                     <UserIcon className="h-8 w-8 mx-auto mb-2 text-primary-600" />
                     <div className="text-sm font-medium">Consultor Direto</div>
@@ -689,11 +728,10 @@ export default function NewLeadPage() {
                   <button
                     type="button"
                     onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
-                    className={`p-4 border-2 rounded-lg transition-all ${
-                      indicatedByType === 'lead'
+                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'lead'
                         ? 'border-primary-500 bg-primary-50'
                         : 'border-gray-300 hover:border-gray-400'
-                    }`}
+                      }`}
                   >
                     <CurrencyDollarIcon className="h-8 w-8 mx-auto mb-2 text-success-600" />
                     <div className="text-sm font-medium">Lead Convertido</div>
@@ -724,9 +762,8 @@ export default function NewLeadPage() {
                       <div
                         key={consultant.id}
                         onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
-                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                          indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
-                        }`}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
+                          }`}
                       >
                         <div className="flex justify-between items-center">
                           <div>
@@ -775,9 +812,8 @@ export default function NewLeadPage() {
                       <div
                         key={lead.id}
                         onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
-                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                          indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
-                        }`}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
+                          }`}
                       >
                         <div className="flex justify-between items-center">
                           <div>
