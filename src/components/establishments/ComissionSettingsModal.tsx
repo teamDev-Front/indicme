@@ -455,24 +455,7 @@ export default function CommissionSettingsModal({
                             )}
                           </div>
 
-                          <div className="mt-4 bg-green-100 border border-green-300 rounded-lg p-3">
-                            <div className="flex">
-                              <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2 mt-0.5" />
-                              <div>
-                                <h4 className="text-sm font-medium text-green-900">Nova Lógica:</h4>
-                                <ul className="text-sm text-green-700 mt-1 space-y-1">
-                                  <li>• Gerente ganha {settings.consultant_value_per_arcada} reais por cada arcada convertida da equipe</li>
-                                  {settings.manager_bonus_active && (
-                                    <>
-                                      <li>• + R$ {settings.manager_bonus_35_arcadas} a cada 35 arcadas da equipe</li>
-                                      <li>• + R$ {settings.manager_bonus_50_arcadas} a cada 50 arcadas da equipe</li>
-                                      <li>• + R$ {settings.manager_bonus_75_arcadas} a cada 75 arcadas da equipe</li>
-                                    </>
-                                  )}
-                                </ul>
-                              </div>
-                            </div>
-                          </div>
+                          
                         </div>
                       </div>
 
