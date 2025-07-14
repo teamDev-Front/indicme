@@ -69,7 +69,7 @@ export class CommissionProcessor {
 
       // 4. Calcular comissão do consultor
       const comissaoBase = arcadasVendidas * valorPorArcada
-      
+
       // Verificar bônus
       const { data: arcadasAtuais } = await this.supabase
         .from('leads')
@@ -163,48 +163,62 @@ export class CommissionProcessor {
 
       let managerCommission = 0
       if (hierarchy?.manager_id) {
-        // Calcular bônus de gerente baseado em marcos da equipe
-        const { data: teamLeads } = await this.supabase
-          .from('leads')
-          .select('arcadas_vendidas, indicated_by')
-          .eq('clinic_id', lead.clinic_id)
-          .eq('establishment_code', establishmentCode)
-          .eq('status', 'converted')
-
-        // Filtrar leads da equipe do gerente
-        const { data: teamMembers } = await this.supabase
-          .from('hierarchies')
-          .select('consultant_id')
-          .eq('manager_id', hierarchy.manager_id)
-
-        const teamIds = teamMembers?.map(t => t.consultant_id) || []
-        teamIds.push(hierarchy.manager_id) // Incluir o próprio gerente
-
-        const teamArcadas = teamLeads
-          ?.filter(tl => teamIds.includes(tl.indicated_by))
-          ?.reduce((sum, tl) => sum + (tl.arcadas_vendidas || 1), 0) || 0
-
-        // Verificar marcos de 35, 50, 75 arcadas
-        const marcos = [
-          { arcadas: 35, bonus: settings?.manager_bonus_35_arcadas || 5000 },
-          { arcadas: 50, bonus: settings?.manager_bonus_50_arcadas || 10000 },
-          { arcadas: 75, bonus: settings?.manager_bonus_75_arcadas || 15000 }
-        ]
+        // 🔥 NOVA LÓGICA: Gerente ganha o mesmo valor por arcada que consultores
+        const managerBaseCommission = arcadasVendidas * valorPorArcada
 
         let managerBonus = 0
-        for (const marco of marcos) {
-          const marcosAntes = Math.floor((teamArcadas - arcadasVendidas) / marco.arcadas)
-          const marcosDepois = Math.floor(teamArcadas / marco.arcadas)
-          const novosMarcos = marcosDepois - marcosAntes
 
-          if (novosMarcos > 0) {
-            managerBonus += novosMarcos * (valorPorArcada + marco.bonus)
+        // Verificar se bônus está ativo para este estabelecimento
+        const { data: establishmentSettings } = await this.supabase
+          .from('establishment_commissions')
+          .select('manager_bonus_active, manager_bonus_35_arcadas, manager_bonus_50_arcadas, manager_bonus_75_arcadas')
+          .eq('establishment_code', establishmentCode)
+          .single()
+
+        const bonusAtivo = establishmentSettings?.manager_bonus_active !== false
+
+        if (bonusAtivo) {
+          // Calcular total de arcadas da equipe do gerente
+          const { data: teamMembers } = await this.supabase
+            .from('hierarchies')
+            .select('consultant_id')
+            .eq('manager_id', hierarchy.manager_id)
+
+          const teamIds = teamMembers?.map(t => t.consultant_id) || []
+          teamIds.push(hierarchy.manager_id) // Incluir o próprio gerente
+
+          const { data: teamLeads } = await this.supabase
+            .from('leads')
+            .select('arcadas_vendidas')
+            .in('indicated_by', teamIds)
+            .eq('establishment_code', establishmentCode)
+            .eq('status', 'converted')
+
+          const totalArcadasAntes = teamLeads?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+          const totalArcadasDepois = totalArcadasAntes + arcadasVendidas
+
+          // Verificar marcos de bônus
+          const marcos = [
+            { arcadas: 35, bonus: establishmentSettings?.manager_bonus_35_arcadas || 5000 },
+            { arcadas: 50, bonus: establishmentSettings?.manager_bonus_50_arcadas || 10000 },
+            { arcadas: 75, bonus: establishmentSettings?.manager_bonus_75_arcadas || 15000 }
+          ]
+
+          for (const marco of marcos) {
+            const marcosAntes = Math.floor(totalArcadasAntes / marco.arcadas)
+            const marcosDepois = Math.floor(totalArcadasDepois / marco.arcadas)
+            const novosMarcos = marcosDepois - marcosAntes
+
+            if (novosMarcos > 0) {
+              managerBonus += novosMarcos * marco.bonus
+            }
           }
         }
 
-        if (managerBonus > 0) {
-          managerCommission = managerBonus
+        const managerTotalCommission = managerBaseCommission + managerBonus
+        managerCommission = managerTotalCommission
 
+        if (managerTotalCommission > 0) {
           const { data: managerCommissionData, error: managerError } = await this.supabase
             .from('commissions')
             .insert({
@@ -212,11 +226,14 @@ export class CommissionProcessor {
               user_id: hierarchy.manager_id,
               clinic_id: lead.clinic_id,
               establishment_code: establishmentCode,
-              amount: managerBonus,
+              amount: managerTotalCommission,
               percentage: 0,
               type: 'manager',
               status: 'pending',
-              arcadas_vendidas: arcadasVendidas
+              arcadas_vendidas: arcadasVendidas,
+              valor_por_arcada: valorPorArcada,
+              bonus_conquistados: managerBonus > 0 ? 1 : 0,
+              valor_bonus: managerBonus
             })
             .select('id')
             .single()
@@ -313,26 +330,26 @@ export function useCommissionProcessor() {
     try {
       setProcessing(true)
       setError(null)
-      
+
       const result = await processor.processLeadConversion(data)
-      
+
       // Feedback personalizado baseado no resultado
       let message = `Lead convertido! Comissão de R$ ${result.consultantCommission.toFixed(2)}`
-      
+
       if (result.bonusGained) {
         message += ' + bônus conquistado! 🎉'
       }
-      
+
       if (result.indicationCommission) {
         message += ` (${(result.indicationCommission / result.consultantCommission * 100).toFixed(0)}% por indicação)`
       }
-      
+
       if (result.managerCommission) {
         message += ` + R$ ${result.managerCommission.toFixed(2)} para o gerente`
       }
 
       toast.success(message, { duration: 6000 })
-      
+
       return result
     } catch (err: any) {
       setError(err.message)

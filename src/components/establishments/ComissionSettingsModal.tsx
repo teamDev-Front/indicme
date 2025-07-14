@@ -29,6 +29,7 @@ interface EstablishmentCommission {
   consultant_bonus_every_arcadas: number
   consultant_bonus_value: number
   // Configurações do Gerente
+  manager_bonus_active: boolean
   manager_bonus_35_arcadas: number
   manager_bonus_50_arcadas: number
   manager_bonus_75_arcadas: number
@@ -51,6 +52,7 @@ export default function CommissionSettingsModal({
     consultant_bonus_every_arcadas: 7,
     consultant_bonus_value: 750,
     // Valores padrão para gerentes
+    manager_bonus_active: true,
     manager_bonus_35_arcadas: 5000,
     manager_bonus_50_arcadas: 10000,
     manager_bonus_75_arcadas: 15000,
@@ -84,6 +86,7 @@ export default function CommissionSettingsModal({
         setSettings({
           ...data,
           establishment_code: establishmentCode,
+          manager_bonus_active: data.manager_bonus_active !== false, // Default true se não existir
         })
       } else {
         // Usar valores padrão se não existir configuração
@@ -125,9 +128,10 @@ export default function CommissionSettingsModal({
         consultant_value_per_arcada: settings.consultant_value_per_arcada,
         consultant_bonus_every_arcadas: settings.consultant_bonus_every_arcadas,
         consultant_bonus_value: settings.consultant_bonus_value,
-        manager_bonus_35_arcadas: settings.manager_bonus_35_arcadas,
-        manager_bonus_50_arcadas: settings.manager_bonus_50_arcadas,
-        manager_bonus_75_arcadas: settings.manager_bonus_75_arcadas,
+        manager_bonus_active: settings.manager_bonus_active,
+        manager_bonus_35_arcadas: settings.manager_bonus_active ? settings.manager_bonus_35_arcadas : 0,
+        manager_bonus_50_arcadas: settings.manager_bonus_active ? settings.manager_bonus_50_arcadas : 0,
+        manager_bonus_75_arcadas: settings.manager_bonus_active ? settings.manager_bonus_75_arcadas : 0,
       }
 
       if (settings.id) {
@@ -180,22 +184,35 @@ export default function CommissionSettingsModal({
   }
 
   const calculateManagerPreview = () => {
-    const bonus35 = Math.floor(previewArcadas / 35)
-    const bonus50 = Math.floor(previewArcadas / 50)
-    const bonus75 = Math.floor(previewArcadas / 75)
+    // Comissão base: mesmo valor por arcada que consultores
+    const comissaoBase = previewArcadas * settings.consultant_value_per_arcada
 
-    const valor35 = bonus35 * (settings.consultant_value_per_arcada + settings.manager_bonus_35_arcadas)
-    const valor50 = bonus50 * (settings.consultant_value_per_arcada + settings.manager_bonus_50_arcadas)
-    const valor75 = bonus75 * (settings.consultant_value_per_arcada + settings.manager_bonus_75_arcadas)
+    let managerBonus = 0
+    let bonus35 = 0, bonus50 = 0, bonus75 = 0
+    let valor35 = 0, valor50 = 0, valor75 = 0
+
+    if (settings.manager_bonus_active) {
+      bonus35 = Math.floor(previewArcadas / 35)
+      bonus50 = Math.floor(previewArcadas / 50)
+      bonus75 = Math.floor(previewArcadas / 75)
+
+      valor35 = bonus35 * settings.manager_bonus_35_arcadas
+      valor50 = bonus50 * settings.manager_bonus_50_arcadas
+      valor75 = bonus75 * settings.manager_bonus_75_arcadas
+
+      managerBonus = valor35 + valor50 + valor75
+    }
 
     return {
+      comissaoBase,
+      managerBonus,
       bonus35,
       bonus50,
       bonus75,
       valor35,
       valor50,
       valor75,
-      valorTotal: valor35 + valor50 + valor75
+      valorTotal: comissaoBase + managerBonus
     }
   }
 
@@ -326,80 +343,132 @@ export default function CommissionSettingsModal({
 
                         {/* Configurações do Gerente */}
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                          <h4 className="text-lg font-medium text-green-900 mb-4 flex items-center">
-                            <CurrencyDollarIcon className="h-5 w-5 mr-2" />
-                            Comissões do Gerente
-                          </h4>
+                          <div className="flex items-center justify-between mb-4">
+                            <h4 className="text-lg font-medium text-green-900 flex items-center">
+                              <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                              Comissões do Gerente
+                            </h4>
+                            
+                            {/* Toggle para ativar/desativar bônus */}
+                            <div className="flex items-center space-x-2">
+                              <span className="text-sm text-green-700">Bônus:</span>
+                              <button
+                                type="button"
+                                onClick={() => setSettings(prev => ({
+                                  ...prev,
+                                  manager_bonus_active: !prev.manager_bonus_active
+                                }))}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                  settings.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                    settings.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                              <span className="text-sm font-medium text-green-700">
+                                {settings.manager_bonus_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </div>
+                          </div>
 
                           <div className="space-y-4">
-                            <div>
-                              <label className="block text-sm font-medium text-green-800 mb-2">
-                                Bônus a cada 35 arcadas (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input"
-                                value={settings.manager_bonus_35_arcadas}
-                                onChange={(e) => setSettings(prev => ({
-                                  ...prev,
-                                  manager_bonus_35_arcadas: parseFloat(e.target.value) || 0
-                                }))}
-                                placeholder="5000.00"
-                              />
-                              <p className="text-xs text-green-600 mt-1">
-                                Valor pago ao gerente + valor da arcada
+                            {/* Info sobre comissão base */}
+                            <div className="bg-blue-100 border border-blue-200 rounded p-3">
+                              <p className="text-sm text-blue-800">
+                                <strong>Comissão Base:</strong> Gerente ganha{' '}
+                                <strong>R$ {settings.consultant_value_per_arcada}/arcada</strong>{' '}
+                                por cada lead convertido da equipe (mesmo valor que consultores)
                               </p>
                             </div>
 
-                            <div>
-                              <label className="block text-sm font-medium text-green-800 mb-2">
-                                Bônus a cada 50 arcadas (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input"
-                                value={settings.manager_bonus_50_arcadas}
-                                onChange={(e) => setSettings(prev => ({
-                                  ...prev,
-                                  manager_bonus_50_arcadas: parseFloat(e.target.value) || 0
-                                }))}
-                                placeholder="10000.00"
-                              />
-                            </div>
+                            {/* Campos de bônus - só mostrar se ativo */}
+                            {settings.manager_bonus_active ? (
+                              <>
+                                <div>
+                                  <label className="block text-sm font-medium text-green-800 mb-2">
+                                    Bônus a cada 35 arcadas (R$)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    className="input"
+                                    value={settings.manager_bonus_35_arcadas}
+                                    onChange={(e) => setSettings(prev => ({
+                                      ...prev,
+                                      manager_bonus_35_arcadas: parseFloat(e.target.value) || 0
+                                    }))}
+                                    placeholder="5000.00"
+                                  />
+                                  <p className="text-xs text-green-600 mt-1">
+                                    Bônus adicional quando equipe atinge 35 arcadas
+                                  </p>
+                                </div>
 
-                            <div>
-                              <label className="block text-sm font-medium text-green-800 mb-2">
-                                Bônus a cada 75 arcadas (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input"
-                                value={settings.manager_bonus_75_arcadas}
-                                onChange={(e) => setSettings(prev => ({
-                                  ...prev,
-                                  manager_bonus_75_arcadas: parseFloat(e.target.value) || 0
-                                }))}
-                                placeholder="15000.00"
-                              />
-                            </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-green-800 mb-2">
+                                      Bônus 50 arcadas (R$)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      className="input"
+                                      value={settings.manager_bonus_50_arcadas}
+                                      onChange={(e) => setSettings(prev => ({
+                                        ...prev,
+                                        manager_bonus_50_arcadas: parseFloat(e.target.value) || 0
+                                      }))}
+                                      placeholder="10000.00"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-sm font-medium text-green-800 mb-2">
+                                      Bônus 75 arcadas (R$)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      className="input"
+                                      value={settings.manager_bonus_75_arcadas}
+                                      onChange={(e) => setSettings(prev => ({
+                                        ...prev,
+                                        manager_bonus_75_arcadas: parseFloat(e.target.value) || 0
+                                      }))}
+                                      placeholder="15000.00"
+                                    />
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="bg-gray-100 rounded p-3">
+                                <p className="text-sm text-gray-600">
+                                  Bônus desativado. Gerente receberá apenas comissão base por arcada da equipe.
+                                </p>
+                              </div>
+                            )}
                           </div>
 
                           <div className="mt-4 bg-green-100 border border-green-300 rounded-lg p-3">
                             <div className="flex">
                               <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2 mt-0.5" />
                               <div>
-                                <h4 className="text-sm font-medium text-green-900">Como funciona:</h4>
+                                <h4 className="text-sm font-medium text-green-900">Nova Lógica:</h4>
                                 <ul className="text-sm text-green-700 mt-1 space-y-1">
-                                  <li>• Gerente ganha baseado nas arcadas convertidas de TODA sua equipe</li>
-                                  <li>• A cada 35 arcadas: R$ {settings.consultant_value_per_arcada} + R$ {settings.manager_bonus_35_arcadas}</li>
-                                  <li>• A cada 50 arcadas: R$ {settings.consultant_value_per_arcada} + R$ {settings.manager_bonus_50_arcadas}</li>
-                                  <li>• A cada 75 arcadas: R$ {settings.consultant_value_per_arcada} + R$ {settings.manager_bonus_75_arcadas}</li>
+                                  <li>• Gerente ganha {settings.consultant_value_per_arcada} reais por cada arcada convertida da equipe</li>
+                                  {settings.manager_bonus_active && (
+                                    <>
+                                      <li>• + R$ {settings.manager_bonus_35_arcadas} a cada 35 arcadas da equipe</li>
+                                      <li>• + R$ {settings.manager_bonus_50_arcadas} a cada 50 arcadas da equipe</li>
+                                      <li>• + R$ {settings.manager_bonus_75_arcadas} a cada 75 arcadas da equipe</li>
+                                    </>
+                                  )}
                                 </ul>
                               </div>
                             </div>
@@ -412,12 +481,12 @@ export default function CommissionSettingsModal({
                         <div className="bg-secondary-50 border border-secondary-200 rounded-lg p-4">
                           <h4 className="text-lg font-medium text-secondary-900 mb-4 flex items-center">
                             <CalculatorIcon className="h-5 w-5 mr-2" />
-                            Simulador de Ganhos
+                            Simulador de Ganhos da Equipe
                           </h4>
 
                           <div className="mb-4">
                             <label className="block text-sm font-medium text-secondary-700 mb-2">
-                              Arcadas para simulação
+                              Arcadas convertidas pela equipe
                             </label>
                             <input
                               type="number"
@@ -451,47 +520,50 @@ export default function CommissionSettingsModal({
 
                           {/* Preview Gerente */}
                           <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                            <h5 className="font-medium text-green-900 mb-3">Ganhos do Gerente</h5>
+                            <h5 className="font-medium text-green-900 mb-3">
+                              Ganhos do Gerente {!settings.manager_bonus_active && '(Só Base)'}
+                            </h5>
                             <div className="space-y-2 text-sm">
-                              {managerPreview.bonus35 > 0 && (
-                                <div className="flex justify-between">
-                                  <span className="text-green-700">Bônus 35 arcadas ({managerPreview.bonus35}x):</span>
-                                  <span className="font-medium">R$ {managerPreview.valor35.toLocaleString('pt-BR')}</span>
-                                </div>
-                              )}
-                              {managerPreview.bonus50 > 0 && (
-                                <div className="flex justify-between">
-                                  <span className="text-green-700">Bônus 50 arcadas ({managerPreview.bonus50}x):</span>
-                                  <span className="font-medium">R$ {managerPreview.valor50.toLocaleString('pt-BR')}</span>
-                                </div>
-                              )}
-                              {managerPreview.bonus75 > 0 && (
-                                <div className="flex justify-between">
-                                  <span className="text-green-700">Bônus 75 arcadas ({managerPreview.bonus75}x):</span>
-                                  <span className="font-medium">R$ {managerPreview.valor75.toLocaleString('pt-BR')}</span>
-                                </div>
-                              )}
-                              {managerPreview.valorTotal > 0 && (
+                              <div className="flex justify-between">
+                                <span className="text-green-700">Comissão base ({previewArcadas} arcadas):</span>
+                                <span className="font-medium">R$ {managerPreview.comissaoBase.toLocaleString('pt-BR')}</span>
+                              </div>
+                              
+                              {settings.manager_bonus_active && (
                                 <>
-                                  <hr className="border-green-300" />
-                                  <div className="flex justify-between text-lg font-bold text-green-900">
-                                    <span>Total Gerente:</span>
-                                    <span>R$ {managerPreview.valorTotal.toLocaleString('pt-BR')}</span>
-                                  </div>
+                                  {managerPreview.bonus35 > 0 && (
+                                    <div className="flex justify-between">
+                                      <span className="text-green-700">Bônus 35 arcadas ({managerPreview.bonus35}x):</span>
+                                      <span className="font-medium">R$ {managerPreview.valor35.toLocaleString('pt-BR')}</span>
+                                    </div>
+                                  )}
+                                  {managerPreview.bonus50 > 0 && (
+                                    <div className="flex justify-between">
+                                      <span className="text-green-700">Bônus 50 arcadas ({managerPreview.bonus50}x):</span>
+                                      <span className="font-medium">R$ {managerPreview.valor50.toLocaleString('pt-BR')}</span>
+                                    </div>
+                                  )}
+                                  {managerPreview.bonus75 > 0 && (
+                                    <div className="flex justify-between">
+                                      <span className="text-green-700">Bônus 75 arcadas ({managerPreview.bonus75}x):</span>
+                                      <span className="font-medium">R$ {managerPreview.valor75.toLocaleString('pt-BR')}</span>
+                                    </div>
+                                  )}
                                 </>
                               )}
-                              {managerPreview.valorTotal === 0 && (
-                                <div className="text-center text-green-600 italic">
-                                  Gerente ainda não atingiu marcos de bônus
-                                </div>
-                              )}
+                              
+                              <hr className="border-green-300" />
+                              <div className="flex justify-between text-lg font-bold text-green-900">
+                                <span>Total Gerente:</span>
+                                <span>R$ {managerPreview.valorTotal.toLocaleString('pt-BR')}</span>
+                              </div>
                             </div>
                           </div>
 
                           {/* Total Geral */}
                           <div className="mt-4 bg-primary-50 border border-primary-200 rounded-lg p-4">
                             <div className="flex justify-between text-lg font-bold text-primary-900">
-                              <span>Total Geral ({previewArcadas} arcadas):</span>
+                              <span>Custo Total ({previewArcadas} arcadas):</span>
                               <span>R$ {(consultantPreview.valorTotal + managerPreview.valorTotal).toLocaleString('pt-BR')}</span>
                             </div>
                           </div>
@@ -502,13 +574,19 @@ export default function CommissionSettingsModal({
                           <h5 className="font-medium text-warning-900 mb-3">Marcos Importantes</h5>
                           <div className="space-y-2 text-sm text-warning-700">
                             <div>• Consultor: bônus a cada {settings.consultant_bonus_every_arcadas} arcadas</div>
-                            <div>• Gerente: marcos em 35, 50 e 75 arcadas da equipe</div>
-                            <div>• Próximo marco gerente: {
-                              previewArcadas < 35 ? `${35 - previewArcadas} arcadas para 1º bônus` :
-                              previewArcadas < 50 ? `${50 - previewArcadas} arcadas para 2º bônus` :
-                              previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
-                              'Todos os marcos atingidos!'
-                            }</div>
+                            {settings.manager_bonus_active ? (
+                              <>
+                                <div>• Gerente: marcos em 35, 50 e 75 arcadas da equipe + base por arcada</div>
+                                <div>• Próximo marco gerente: {
+                                  previewArcadas < 35 ? `${35 - previewArcadas} arcadas para 1º bônus` :
+                                    previewArcadas < 50 ? `${50 - previewArcadas} arcadas para 2º bônus` :
+                                      previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
+                                        'Todos os marcos atingidos!'
+                                }</div>
+                              </>
+                            ) : (
+                              <div>• Gerente: apenas comissão base por arcada (bônus desativado)</div>
+                            )}
                           </div>
                         </div>
                       </div>

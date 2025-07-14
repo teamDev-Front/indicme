@@ -21,15 +21,11 @@ interface ConsultantCommissionResult {
 }
 
 interface ManagerCommissionResult {
-  bonus35Ganhos: number
-  bonus50Ganhos: number
-  bonus75Ganhos: number
+  comissaoBase: number     
+  managerBonus: number      
+  bonusAtivo: boolean   
   valorTotal: number
   arcadasEquipe: number
-  proximoMarco: {
-    tipo: '35' | '50' | '75' | 'completo'
-    faltam: number
-  }
 }
 
 export class CommissionCalculator {
@@ -119,7 +115,6 @@ export class CommissionCalculator {
     }
   }
 
-  // Calcular comissão do gerente
   async calculateManagerCommission(
     managerId: string,
     establishmentCode: string,
@@ -136,59 +131,64 @@ export class CommissionCalculator {
         .eq('manager_id', managerId)
 
       const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
-      consultantIds.push(managerId) // Incluir próprio gerente
 
-      // Buscar total de arcadas da equipe neste estabelecimento
-      const { data: leadsData } = await this.supabase
+      // 🔥 NOVA LÓGICA: Gerente ganha o mesmo valor por arcada que consultores
+      // Para cada lead convertido da equipe, ganha o valor configurado do estabelecimento
+
+      // Buscar leads convertidos da equipe neste estabelecimento
+      const { data: teamLeads } = await this.supabase
         .from('leads')
         .select('arcadas_vendidas')
         .in('indicated_by', consultantIds)
         .eq('establishment_code', establishmentCode)
         .eq('status', 'converted')
 
-      const arcadasEquipe = leadsData?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
-      const arcadasTotais = arcadasEquipe + arcadasAdicionadas
+      const totalArcadasEquipe = teamLeads?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
+      const novasArcadasEquipe = arcadasAdicionadas // Arcadas que serão adicionadas agora
 
-      // Calcular bônus do gerente (marcos de 35, 50, 75)
-      const bonus35Antes = Math.floor(arcadasEquipe / 35)
-      const bonus50Antes = Math.floor(arcadasEquipe / 50)
-      const bonus75Antes = Math.floor(arcadasEquipe / 75)
+      // Comissão base: valor por arcada das novas conversões da equipe
+      const comissaoBaseEquipe = novasArcadasEquipe * settings.consultant_value_per_arcada
 
-      const bonus35Depois = Math.floor(arcadasTotais / 35)
-      const bonus50Depois = Math.floor(arcadasTotais / 50)
-      const bonus75Depois = Math.floor(arcadasTotais / 75)
+      let managerBonus = 0
 
-      const bonus35Ganhos = bonus35Depois - bonus35Antes
-      const bonus50Ganhos = bonus50Depois - bonus50Antes
-      const bonus75Ganhos = bonus75Depois - bonus75Antes
+      // 🔥 VERIFICAR SE BÔNUS ESTÁ ATIVO
+      const { data: establishmentSettings } = await this.supabase
+        .from('establishment_commissions')
+        .select('manager_bonus_active, manager_bonus_35_arcadas, manager_bonus_50_arcadas, manager_bonus_75_arcadas')
+        .eq('establishment_code', establishmentCode)
+        .single()
 
-      // Calcular valores
-      const valor35 = bonus35Ganhos * (settings.consultant_value_per_arcada + settings.manager_bonus_35_arcadas)
-      const valor50 = bonus50Ganhos * (settings.consultant_value_per_arcada + settings.manager_bonus_50_arcadas)
-      const valor75 = bonus75Ganhos * (settings.consultant_value_per_arcada + settings.manager_bonus_75_arcadas)
+      const bonusAtivo = establishmentSettings?.manager_bonus_active !== false // Default true se não existir
 
-      // Determinar próximo marco
-      let proximoMarco: { tipo: '35' | '50' | '75' | 'completo', faltam: number }
-      
-      if (arcadasTotais < 35) {
-        proximoMarco = { tipo: '35', faltam: 35 - arcadasTotais }
-      } else if (arcadasTotais < 50) {
-        proximoMarco = { tipo: '50', faltam: 50 - arcadasTotais }
-      } else if (arcadasTotais < 75) {
-        proximoMarco = { tipo: '75', faltam: 75 - arcadasTotais }
-      } else {
-        // Próximo ciclo
-        const proximoCiclo35 = Math.ceil(arcadasTotais / 35) * 35
-        proximoMarco = { tipo: '35', faltam: proximoCiclo35 - arcadasTotais }
+      if (bonusAtivo) {
+        // Calcular bônus apenas se estiver ativo
+        const arcadasTotaisAntes = totalArcadasEquipe
+        const arcadasTotaisDepois = totalArcadasEquipe + arcadasAdicionadas
+
+        // Verificar marcos de 35, 50, 75 arcadas
+        const marcos = [
+          { arcadas: 35, bonus: establishmentSettings?.manager_bonus_35_arcadas || 5000 },
+          { arcadas: 50, bonus: establishmentSettings?.manager_bonus_50_arcadas || 10000 },
+          { arcadas: 75, bonus: establishmentSettings?.manager_bonus_75_arcadas || 15000 }
+        ]
+
+        for (const marco of marcos) {
+          const marcosAntes = Math.floor(arcadasTotaisAntes / marco.arcadas)
+          const marcosDepois = Math.floor(arcadasTotaisDepois / marco.arcadas)
+          const novosMarcos = marcosDepois - marcosAntes
+
+          if (novosMarcos > 0) {
+            managerBonus += novosMarcos * marco.bonus
+          }
+        }
       }
 
       return {
-        bonus35Ganhos,
-        bonus50Ganhos,
-        bonus75Ganhos,
-        valorTotal: valor35 + valor50 + valor75,
-        arcadasEquipe: arcadasTotais,
-        proximoMarco
+        comissaoBase: comissaoBaseEquipe,
+        managerBonus,
+        valorTotal: comissaoBaseEquipe + managerBonus,
+        arcadasEquipe: totalArcadasEquipe + arcadasAdicionadas,
+        bonusAtivo
       }
     } catch (error) {
       console.error('Erro ao calcular comissão do gerente:', error)
