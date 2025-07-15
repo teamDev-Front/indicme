@@ -20,6 +20,17 @@ export interface EstablishmentCommissionSettings {
   value_per_arcada: number
   bonus_a_cada_arcadas: number
   valor_bonus: number
+   // Configurações do Consultor
+  consultant_value_per_arcada: number
+  consultant_bonus_every_arcadas: number
+  consultant_bonus_value: number
+  
+  // Configurações do Gerente - ATUALIZADO
+  manager_value_per_arcada: number        // 🔥 NOVO: Comissão base independente
+  manager_bonus_active: boolean
+  manager_bonus_35_arcadas: number
+  manager_bonus_50_arcadas: number
+  manager_bonus_75_arcadas: number
   created_at?: string
   updated_at?: string
 }
@@ -40,4 +51,18 @@ export interface UserEstablishment {
   added_by?: string
   joined_at: string
   created_at: string
+}
+
+export interface CommissionFormData {
+  // Consultor
+  consultant_value_per_arcada: number
+  consultant_bonus_every_arcadas: number
+  consultant_bonus_value: number
+  
+  // Gerente - ATUALIZADO
+  manager_value_per_arcada: number        // 🔥 NOVO
+  manager_bonus_active: boolean
+  manager_bonus_35_arcadas: number
+  manager_bonus_50_arcadas: number
+  manager_bonus_75_arcadas: number
 }

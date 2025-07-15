@@ -5,6 +5,8 @@ interface EstablishmentCommissionSettings {
   consultant_value_per_arcada: number
   consultant_bonus_every_arcadas: number
   consultant_bonus_value: number
+  manager_value_per_arcada: number        // 🔥 NOVO: Valor independente
+  manager_bonus_active: boolean           // 🔥 NOVO: Switch de bônus
   manager_bonus_35_arcadas: number
   manager_bonus_50_arcadas: number
   manager_bonus_75_arcadas: number
@@ -21,9 +23,9 @@ interface ConsultantCommissionResult {
 }
 
 interface ManagerCommissionResult {
-  comissaoBase: number     
-  managerBonus: number      
-  bonusAtivo: boolean   
+  comissaoBase: number
+  managerBonus: number
+  bonusAtivo: boolean
   valorTotal: number
   arcadasEquipe: number
 }
@@ -49,6 +51,8 @@ export class CommissionCalculator {
         consultant_value_per_arcada: 750,
         consultant_bonus_every_arcadas: 7,
         consultant_bonus_value: 750,
+        manager_value_per_arcada: 750,       // 🔥 NOVO: Valor independente
+        manager_bonus_active: true,
         manager_bonus_35_arcadas: 5000,
         manager_bonus_50_arcadas: 10000,
         manager_bonus_75_arcadas: 15000,
@@ -60,6 +64,8 @@ export class CommissionCalculator {
         consultant_value_per_arcada: 750,
         consultant_bonus_every_arcadas: 7,
         consultant_bonus_value: 750,
+        manager_value_per_arcada: 750,       // 🔥 NOVO: Valor independente
+        manager_bonus_active: true,    
         manager_bonus_35_arcadas: 5000,
         manager_bonus_50_arcadas: 10000,
         manager_bonus_75_arcadas: 15000,
@@ -132,9 +138,6 @@ export class CommissionCalculator {
 
       const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
 
-      // 🔥 NOVA LÓGICA: Gerente ganha o mesmo valor por arcada que consultores
-      // Para cada lead convertido da equipe, ganha o valor configurado do estabelecimento
-
       // Buscar leads convertidos da equipe neste estabelecimento
       const { data: teamLeads } = await this.supabase
         .from('leads')
@@ -144,32 +147,22 @@ export class CommissionCalculator {
         .eq('status', 'converted')
 
       const totalArcadasEquipe = teamLeads?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
-      const novasArcadasEquipe = arcadasAdicionadas // Arcadas que serão adicionadas agora
 
-      // Comissão base: valor por arcada das novas conversões da equipe
-      const comissaoBaseEquipe = novasArcadasEquipe * settings.consultant_value_per_arcada
+      // 🔥 NOVA LÓGICA: Usar valor independente do gerente
+      const comissaoBaseEquipe = arcadasAdicionadas * settings.manager_value_per_arcada
 
       let managerBonus = 0
 
-      // 🔥 VERIFICAR SE BÔNUS ESTÁ ATIVO
-      const { data: establishmentSettings } = await this.supabase
-        .from('establishment_commissions')
-        .select('manager_bonus_active, manager_bonus_35_arcadas, manager_bonus_50_arcadas, manager_bonus_75_arcadas')
-        .eq('establishment_code', establishmentCode)
-        .single()
-
-      const bonusAtivo = establishmentSettings?.manager_bonus_active !== false // Default true se não existir
-
-      if (bonusAtivo) {
-        // Calcular bônus apenas se estiver ativo
+      // Calcular bônus apenas se estiver ativo
+      if (settings.manager_bonus_active) {
         const arcadasTotaisAntes = totalArcadasEquipe
         const arcadasTotaisDepois = totalArcadasEquipe + arcadasAdicionadas
 
         // Verificar marcos de 35, 50, 75 arcadas
         const marcos = [
-          { arcadas: 35, bonus: establishmentSettings?.manager_bonus_35_arcadas || 5000 },
-          { arcadas: 50, bonus: establishmentSettings?.manager_bonus_50_arcadas || 10000 },
-          { arcadas: 75, bonus: establishmentSettings?.manager_bonus_75_arcadas || 15000 }
+          { arcadas: 35, bonus: settings.manager_bonus_35_arcadas },
+          { arcadas: 50, bonus: settings.manager_bonus_50_arcadas },
+          { arcadas: 75, bonus: settings.manager_bonus_75_arcadas }
         ]
 
         for (const marco of marcos) {
@@ -188,7 +181,7 @@ export class CommissionCalculator {
         managerBonus,
         valorTotal: comissaoBaseEquipe + managerBonus,
         arcadasEquipe: totalArcadasEquipe + arcadasAdicionadas,
-        bonusAtivo
+        bonusAtivo: settings.manager_bonus_active
       }
     } catch (error) {
       console.error('Erro ao calcular comissão do gerente:', error)
@@ -196,7 +189,7 @@ export class CommissionCalculator {
     }
   }
 
-  // Processar conversão de lead com cálculo automático de comissões
+  // Processar conversão de lead - ATUALIZADO
   async processLeadConversion(
     leadId: string,
     arcadasVendidas: number,
@@ -249,7 +242,7 @@ export class CommissionCalculator {
           clinic_id: lead.clinic_id,
           establishment_code: establishmentCode,
           amount: consultantCommission.valorTotal,
-          percentage: 0, // Campo obrigatório mas não usado
+          percentage: 0,
           type: 'consultant',
           status: 'pending',
           arcadas_vendidas: arcadasVendidas,
@@ -282,6 +275,9 @@ export class CommissionCalculator {
 
         // Criar comissão do gerente apenas se houver valor
         if (managerCommission.valorTotal > 0) {
+          // 🔥 ATUALIZADO: Buscar configurações para obter valor por arcada do gerente
+          const settings = await this.getEstablishmentSettings(establishmentCode)
+
           const { data: managerCommissionData, error: managerCommissionError } = await this.supabase
             .from('commissions')
             .insert({
@@ -290,10 +286,13 @@ export class CommissionCalculator {
               clinic_id: lead.clinic_id,
               establishment_code: establishmentCode,
               amount: managerCommission.valorTotal,
-              percentage: 0, // Campo obrigatório mas não usado
+              percentage: 0,
               type: 'manager',
               status: 'pending',
-              arcadas_vendidas: arcadasVendidas
+              arcadas_vendidas: arcadasVendidas,
+              valor_por_arcada: settings.manager_value_per_arcada,  // 🔥 NOVO: Usar valor do gerente
+              bonus_conquistados: managerCommission.managerBonus > 0 ? 1 : 0,
+              valor_bonus: managerCommission.managerBonus
             })
             .select('id')
             .single()

@@ -97,7 +97,8 @@ export default function EstablishmentsPage() {
     consultant_value_per_arcada: 750,
     consultant_bonus_every_arcadas: 7,
     consultant_bonus_value: 750,
-    manager_bonus_active: true, 
+    manager_value_per_arcada: 750,
+    manager_bonus_active: true,
     manager_bonus_35_arcadas: 5000,
     manager_bonus_50_arcadas: 10000,
     manager_bonus_75_arcadas: 15000,
@@ -383,7 +384,7 @@ export default function EstablishmentsPage() {
     setFormData(prev => ({ ...prev, code: result }))
   }
 
-const handleSubmit = async () => {
+  const handleSubmit = async () => {
     try {
       setSubmitting(true)
 
@@ -424,10 +425,13 @@ const handleSubmit = async () => {
           .from('establishment_commissions')
           .insert({
             establishment_code: formData.code.toUpperCase(),
+            // Consultor
             consultant_value_per_arcada: commissionData.consultant_value_per_arcada,
             consultant_bonus_every_arcadas: commissionData.consultant_bonus_every_arcadas,
             consultant_bonus_value: commissionData.consultant_bonus_value,
-            manager_bonus_active: commissionData.manager_bonus_active, // 🔥 NOVO: Incluir o switch
+            // Gerente - ATUALIZADO
+            manager_value_per_arcada: commissionData.manager_value_per_arcada,    // 🔥 NOVO
+            manager_bonus_active: commissionData.manager_bonus_active,
             manager_bonus_35_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_35_arcadas : 0,
             manager_bonus_50_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_50_arcadas : 0,
             manager_bonus_75_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_75_arcadas : 0,
@@ -503,6 +507,7 @@ const handleSubmit = async () => {
         consultant_value_per_arcada: 750,
         consultant_bonus_every_arcadas: 7,
         consultant_bonus_value: 750,
+        manager_value_per_arcada: 750,
         manager_bonus_active: true, // 🔥 PADRÃO: Bônus ativo
         manager_bonus_35_arcadas: 5000,
         manager_bonus_50_arcadas: 10000,
@@ -1175,7 +1180,7 @@ const handleSubmit = async () => {
       </motion.div>
 
       {/* Create/Edit Modal com Configurações de Comissão */}
-       <Transition appear show={isModalOpen} as={Fragment}>
+      <Transition appear show={isModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
           <Transition.Child
             as={Fragment}
@@ -1407,8 +1412,8 @@ const handleSubmit = async () => {
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                           <div className="flex items-center justify-between mb-4">
                             <h5 className="text-sm font-medium text-green-900">Comissões do Gerente</h5>
-                            
-                            {/* 🔥 NOVO: Toggle para ativar/desativar bônus */}
+
+                            {/* Switch do bônus - código existente */}
                             <div className="flex items-center space-x-2">
                               <span className="text-sm text-green-700">Bônus:</span>
                               <button
@@ -1417,14 +1422,12 @@ const handleSubmit = async () => {
                                   ...prev,
                                   manager_bonus_active: !prev.manager_bonus_active
                                 }))}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                  commissionData.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
-                                }`}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${commissionData.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
+                                  }`}
                               >
                                 <span
-                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                    commissionData.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
-                                  }`}
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${commissionData.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
                                 />
                               </button>
                               <span className="text-sm font-medium text-green-700">
@@ -1434,16 +1437,38 @@ const handleSubmit = async () => {
                           </div>
 
                           <div className="space-y-3">
-                            {/* Info sobre comissão base */}
-                            <div className="bg-blue-100 border border-blue-200 rounded p-3">
-                              <p className="text-sm text-blue-800">
-                                <strong>Comissão Base:</strong> Gerente ganha{' '}
-                                <strong>R$ {commissionData.consultant_value_per_arcada}/arcada</strong>{' '}
-                                por cada lead convertido da equipe (mesmo valor que consultores)
+                            {/* 🔥 NOVO: Campo para comissão base independente */}
+                            <div>
+                              <label className="block text-xs font-medium text-green-800 mb-1">
+                                Valor por Arcada do Gerente (R$)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="input input-sm"
+                                value={commissionData.manager_value_per_arcada}
+                                onChange={(e) => setCommissionData(prev => ({
+                                  ...prev,
+                                  manager_value_per_arcada: parseFloat(e.target.value) || 0
+                                }))}
+                                placeholder="750.00"
+                              />
+                              <p className="text-xs text-green-600 mt-1">
+                                Valor que o gerente ganha por cada arcada convertida da equipe
                               </p>
                             </div>
 
-                            {/* Campos de bônus - só mostrar se ativo */}
+                            {/* Info atualizada */}
+                            <div className="bg-blue-100 border border-blue-200 rounded p-3">
+                              <p className="text-sm text-blue-800">
+                                <strong>Comissão Base:</strong> Gerente ganha{' '}
+                                <strong>R$ {commissionData.manager_value_per_arcada}/arcada</strong>{' '}
+                                por cada lead convertido da equipe (independente dos consultores)
+                              </p>
+                            </div>
+
+                            {/* Campos de bônus - código existente */}
                             {commissionData.manager_bonus_active ? (
                               <>
                                 <div>
@@ -1505,21 +1530,21 @@ const handleSubmit = async () => {
                             ) : (
                               <div className="bg-gray-100 rounded p-3">
                                 <p className="text-sm text-gray-600">
-                                  Bônus desativado. Gerente receberá apenas comissão base por arcada da equipe.
+                                  Bônus desativado. Gerente receberá apenas R$ {commissionData.manager_value_per_arcada}/arcada da equipe.
                                 </p>
                               </div>
                             )}
                           </div>
                         </div>
 
-                        {/* Preview das Configurações - ATUALIZADO */}
+                        {/* Preview atualizado */}
                         <div className="bg-secondary-50 border border-secondary-200 rounded-lg p-3">
                           <h5 className="text-xs font-medium text-secondary-900 mb-2">Resumo</h5>
                           <div className="text-xs text-secondary-700 space-y-1">
                             <div>• Consultor: R$ {commissionData.consultant_value_per_arcada}/arcada + bônus a cada {commissionData.consultant_bonus_every_arcadas} arcadas</div>
-                            <div>• Gerente: R$ {commissionData.consultant_value_per_arcada}/arcada da equipe 
-                              {commissionData.manager_bonus_active ? 
-                                ` + bônus em 35, 50 e 75 arcadas` : 
+                            <div>• Gerente: R$ {commissionData.manager_value_per_arcada}/arcada da equipe
+                              {commissionData.manager_bonus_active ?
+                                ` + bônus em 35, 50 e 75 arcadas` :
                                 ` (sem bônus)`
                               }
                             </div>

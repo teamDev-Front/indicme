@@ -1,4 +1,5 @@
-// src/components/establishments/CommissionSettingsModal.tsx
+// src/app/dashboard/establishments/page.tsx - ATUALIZADO com comissões independentes para consultor e gerente
+
 'use client'
 
 import { Fragment, useState, useEffect } from 'react'
@@ -28,7 +29,8 @@ interface EstablishmentCommission {
   consultant_value_per_arcada: number
   consultant_bonus_every_arcadas: number
   consultant_bonus_value: number
-  // Configurações do Gerente
+  // Configurações do Gerente - ATUALIZADO com valor independente
+  manager_value_per_arcada: number // 🔥 NOVO: Valor independente para gerente
   manager_bonus_active: boolean
   manager_bonus_35_arcadas: number
   manager_bonus_50_arcadas: number
@@ -51,7 +53,8 @@ export default function CommissionSettingsModal({
     consultant_value_per_arcada: 750,
     consultant_bonus_every_arcadas: 7,
     consultant_bonus_value: 750,
-    // Valores padrão para gerentes
+    // Valores padrão para gerentes - ATUALIZADO
+    manager_value_per_arcada: 750, // 🔥 NOVO: Valor independente, inicialmente igual ao consultor
     manager_bonus_active: true,
     manager_bonus_35_arcadas: 5000,
     manager_bonus_50_arcadas: 10000,
@@ -86,7 +89,9 @@ export default function CommissionSettingsModal({
         setSettings({
           ...data,
           establishment_code: establishmentCode,
-          manager_bonus_active: data.manager_bonus_active !== false, // Default true se não existir
+          manager_bonus_active: data.manager_bonus_active !== false,
+          // 🔥 NOVO: Garantir que o campo manager_value_per_arcada existe
+          manager_value_per_arcada: data.manager_value_per_arcada || data.consultant_value_per_arcada || 750,
         })
       } else {
         // Usar valores padrão se não existir configuração
@@ -113,6 +118,11 @@ export default function CommissionSettingsModal({
         return
       }
 
+      if (settings.manager_value_per_arcada <= 0) {
+        toast.error('Valor por arcada do gerente deve ser maior que zero')
+        return
+      }
+
       if (settings.consultant_bonus_every_arcadas <= 0) {
         toast.error('Intervalo de bônus do consultor deve ser maior que zero')
         return
@@ -128,6 +138,7 @@ export default function CommissionSettingsModal({
         consultant_value_per_arcada: settings.consultant_value_per_arcada,
         consultant_bonus_every_arcadas: settings.consultant_bonus_every_arcadas,
         consultant_bonus_value: settings.consultant_bonus_value,
+        manager_value_per_arcada: settings.manager_value_per_arcada, // 🔥 NOVO: Salvar valor independente
         manager_bonus_active: settings.manager_bonus_active,
         manager_bonus_35_arcadas: settings.manager_bonus_active ? settings.manager_bonus_35_arcadas : 0,
         manager_bonus_50_arcadas: settings.manager_bonus_active ? settings.manager_bonus_50_arcadas : 0,
@@ -184,8 +195,8 @@ export default function CommissionSettingsModal({
   }
 
   const calculateManagerPreview = () => {
-    // Comissão base: mesmo valor por arcada que consultores
-    const comissaoBase = previewArcadas * settings.consultant_value_per_arcada
+    // 🔥 ATUALIZADO: Usar valor independente do gerente
+    const comissaoBase = previewArcadas * settings.manager_value_per_arcada
 
     let managerBonus = 0
     let bonus35 = 0, bonus50 = 0, bonus75 = 0
@@ -341,7 +352,7 @@ export default function CommissionSettingsModal({
                           </div>
                         </div>
 
-                        {/* Configurações do Gerente */}
+                        {/* Configurações do Gerente - ATUALIZADO */}
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                           <div className="flex items-center justify-between mb-4">
                             <h4 className="text-lg font-medium text-green-900 flex items-center">
@@ -375,12 +386,25 @@ export default function CommissionSettingsModal({
                           </div>
 
                           <div className="space-y-4">
-                            {/* Info sobre comissão base */}
-                            <div className="bg-blue-100 border border-blue-200 rounded p-3">
-                              <p className="text-sm text-blue-800">
-                                <strong>Comissão Base:</strong> Gerente ganha{' '}
-                                <strong>R$ {settings.consultant_value_per_arcada}/arcada</strong>{' '}
-                                por cada lead convertido da equipe (mesmo valor que consultores)
+                            {/* 🔥 NOVO: Campo para valor por arcada do gerente */}
+                            <div>
+                              <label className="block text-sm font-medium text-green-800 mb-2">
+                                Valor por Arcada do Gerente (R$)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="input"
+                                value={settings.manager_value_per_arcada}
+                                onChange={(e) => setSettings(prev => ({
+                                  ...prev,
+                                  manager_value_per_arcada: parseFloat(e.target.value) || 0
+                                }))}
+                                placeholder="750.00"
+                              />
+                              <p className="text-xs text-green-600 mt-1">
+                                Valor pago por cada arcada vendida pela equipe (pode ser diferente do consultor)
                               </p>
                             </div>
 
@@ -449,17 +473,15 @@ export default function CommissionSettingsModal({
                             ) : (
                               <div className="bg-gray-100 rounded p-3">
                                 <p className="text-sm text-gray-600">
-                                  Bônus desativado. Gerente receberá apenas comissão base por arcada da equipe.
+                                  Bônus desativado. Gerente receberá apenas R$ {settings.manager_value_per_arcada}/arcada da equipe.
                                 </p>
                               </div>
                             )}
                           </div>
-
-                          
                         </div>
                       </div>
 
-                      {/* Preview Calculator */}
+                      {/* Preview Calculator - ATUALIZADO */}
                       <div className="space-y-6">
                         <div className="bg-secondary-50 border border-secondary-200 rounded-lg p-4">
                           <h4 className="text-lg font-medium text-secondary-900 mb-4 flex items-center">
@@ -501,7 +523,7 @@ export default function CommissionSettingsModal({
                             </div>
                           </div>
 
-                          {/* Preview Gerente */}
+                          {/* Preview Gerente - ATUALIZADO */}
                           <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                             <h5 className="font-medium text-green-900 mb-3">
                               Ganhos do Gerente {!settings.manager_bonus_active && '(Só Base)'}
@@ -510,6 +532,15 @@ export default function CommissionSettingsModal({
                               <div className="flex justify-between">
                                 <span className="text-green-700">Comissão base ({previewArcadas} arcadas):</span>
                                 <span className="font-medium">R$ {managerPreview.comissaoBase.toLocaleString('pt-BR')}</span>
+                              </div>
+                              <div className="flex justify-between text-xs">
+                                <span className="text-green-600">@ R$ {settings.manager_value_per_arcada}/arcada</span>
+                                <span className="text-green-600">
+                                  {settings.manager_value_per_arcada === settings.consultant_value_per_arcada ? 
+                                    '(mesmo valor que consultor)' : 
+                                    '(valor diferente do consultor)'
+                                  }
+                                </span>
                               </div>
                               
                               {settings.manager_bonus_active && (
@@ -552,23 +583,24 @@ export default function CommissionSettingsModal({
                           </div>
                         </div>
 
-                        {/* Marcos de Referência */}
+                        {/* Marcos de Referência - ATUALIZADO */}
                         <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
                           <h5 className="font-medium text-warning-900 mb-3">Marcos Importantes</h5>
                           <div className="space-y-2 text-sm text-warning-700">
-                            <div>• Consultor: bônus a cada {settings.consultant_bonus_every_arcadas} arcadas</div>
-                            {settings.manager_bonus_active ? (
-                              <>
-                                <div>• Gerente: marcos em 35, 50 e 75 arcadas da equipe + base por arcada</div>
-                                <div>• Próximo marco gerente: {
-                                  previewArcadas < 35 ? `${35 - previewArcadas} arcadas para 1º bônus` :
-                                    previewArcadas < 50 ? `${50 - previewArcadas} arcadas para 2º bônus` :
-                                      previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
-                                        'Todos os marcos atingidos!'
-                                }</div>
-                              </>
-                            ) : (
-                              <div>• Gerente: apenas comissão base por arcada (bônus desativado)</div>
+                            <div>• Consultor: R$ {settings.consultant_value_per_arcada}/arcada + bônus a cada {settings.consultant_bonus_every_arcadas} arcadas</div>
+                            <div>• Gerente: R$ {settings.manager_value_per_arcada}/arcada da equipe 
+                              {settings.manager_bonus_active ? 
+                                ' + marcos em 35, 50 e 75 arcadas' : 
+                                ' (sem bônus)'
+                              }
+                            </div>
+                            {settings.manager_bonus_active && (
+                              <div>• Próximo marco gerente: {
+                                previewArcadas < 35 ? `${35 - previewArcadas} arcadas para 1º bônus` :
+                                  previewArcadas < 50 ? `${50 - previewArcadas} arcadas para 2º bônus` :
+                                    previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
+                                      'Todos os marcos atingidos!'
+                              }</div>
                             )}
                           </div>
                         </div>
