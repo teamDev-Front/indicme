@@ -97,6 +97,7 @@ export default function EstablishmentsPage() {
     consultant_value_per_arcada: 750,
     consultant_bonus_every_arcadas: 7,
     consultant_bonus_value: 750,
+    manager_bonus_active: true, 
     manager_bonus_35_arcadas: 5000,
     manager_bonus_50_arcadas: 10000,
     manager_bonus_75_arcadas: 15000,
@@ -382,48 +383,7 @@ export default function EstablishmentsPage() {
     setFormData(prev => ({ ...prev, code: result }))
   }
 
-  const handleOpenModal = (mode: 'create' | 'edit', establishment?: EstablishmentCode) => {
-    setModalMode(mode)
-    if (mode === 'edit' && establishment) {
-      setSelectedEstablishment(establishment)
-      setFormData({
-        code: establishment.code,
-        name: establishment.name,
-        description: establishment.description || '',
-        address: establishment.address || '',
-        city: establishment.city || '',
-        state: establishment.state || '',
-        phone: establishment.phone || '',
-        email: establishment.email || '',
-      })
-    } else {
-      setSelectedEstablishment(null)
-      setFormData({
-        code: '',
-        name: '',
-        description: '',
-        address: '',
-        city: '',
-        state: '',
-        phone: '',
-        email: '',
-      })
-      setCommissionData({
-        consultant_value_per_arcada: 750,
-        consultant_bonus_every_arcadas: 7,
-        consultant_bonus_value: 750,
-        manager_bonus_35_arcadas: 5000,
-        manager_bonus_50_arcadas: 10000,
-        manager_bonus_75_arcadas: 15000,
-      })
-      if (mode === 'create') {
-        generateCode()
-      }
-    }
-    setIsModalOpen(true)
-  }
-
-  const handleSubmit = async () => {
+const handleSubmit = async () => {
     try {
       setSubmitting(true)
 
@@ -459,7 +419,7 @@ export default function EstablishmentsPage() {
 
         if (error) throw error
 
-        // 2. Criar configurações de comissão
+        // 2. Criar configurações de comissão - ATUALIZADO com o switch
         const { error: commissionError } = await supabase
           .from('establishment_commissions')
           .insert({
@@ -467,9 +427,10 @@ export default function EstablishmentsPage() {
             consultant_value_per_arcada: commissionData.consultant_value_per_arcada,
             consultant_bonus_every_arcadas: commissionData.consultant_bonus_every_arcadas,
             consultant_bonus_value: commissionData.consultant_bonus_value,
-            manager_bonus_35_arcadas: commissionData.manager_bonus_35_arcadas,
-            manager_bonus_50_arcadas: commissionData.manager_bonus_50_arcadas,
-            manager_bonus_75_arcadas: commissionData.manager_bonus_75_arcadas,
+            manager_bonus_active: commissionData.manager_bonus_active, // 🔥 NOVO: Incluir o switch
+            manager_bonus_35_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_35_arcadas : 0,
+            manager_bonus_50_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_50_arcadas : 0,
+            manager_bonus_75_arcadas: commissionData.manager_bonus_active ? commissionData.manager_bonus_75_arcadas : 0,
           })
 
         if (commissionError) {
@@ -480,7 +441,7 @@ export default function EstablishmentsPage() {
         }
 
       } else {
-        // Edição
+        // Edição (código existente)
         if (!selectedEstablishment) return
 
         const { error } = await supabase
@@ -509,6 +470,49 @@ export default function EstablishmentsPage() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const handleOpenModal = (mode: 'create' | 'edit', establishment?: EstablishmentCode) => {
+    setModalMode(mode)
+    if (mode === 'edit' && establishment) {
+      setSelectedEstablishment(establishment)
+      setFormData({
+        code: establishment.code,
+        name: establishment.name,
+        description: establishment.description || '',
+        address: establishment.address || '',
+        city: establishment.city || '',
+        state: establishment.state || '',
+        phone: establishment.phone || '',
+        email: establishment.email || '',
+      })
+    } else {
+      setSelectedEstablishment(null)
+      setFormData({
+        code: '',
+        name: '',
+        description: '',
+        address: '',
+        city: '',
+        state: '',
+        phone: '',
+        email: '',
+      })
+      // Reset para valores padrão - ATUALIZADO com o switch
+      setCommissionData({
+        consultant_value_per_arcada: 750,
+        consultant_bonus_every_arcadas: 7,
+        consultant_bonus_value: 750,
+        manager_bonus_active: true, // 🔥 PADRÃO: Bônus ativo
+        manager_bonus_35_arcadas: 5000,
+        manager_bonus_50_arcadas: 10000,
+        manager_bonus_75_arcadas: 15000,
+      })
+      if (mode === 'create') {
+        generateCode()
+      }
+    }
+    setIsModalOpen(true)
   }
 
   const handleToggleStatus = async (establishment: EstablishmentCode) => {
@@ -1171,7 +1175,7 @@ export default function EstablishmentsPage() {
       </motion.div>
 
       {/* Create/Edit Modal com Configurações de Comissão */}
-      <Transition appear show={isModalOpen} as={Fragment}>
+       <Transition appear show={isModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
           <Transition.Child
             as={Fragment}
@@ -1247,6 +1251,7 @@ export default function EstablishmentsPage() {
                         </div>
                       </div>
 
+                      {/* Campos de endereço, telefone etc. - código existente */}
                       <div>
                         <label className="block text-sm font-medium text-secondary-700 mb-2">
                           Descrição
@@ -1331,7 +1336,7 @@ export default function EstablishmentsPage() {
                       </div>
                     </div>
 
-                    {/* Configurações de Comissão (apenas na criação) */}
+                    {/* Configurações de Comissão (apenas na criação) - ATUALIZADO */}
                     {modalMode === 'create' && (
                       <div className="space-y-4">
                         <h4 className="text-md font-medium text-secondary-900 mb-3">Configurações de Comissão</h4>
@@ -1398,75 +1403,131 @@ export default function EstablishmentsPage() {
                           </div>
                         </div>
 
-                        {/* Configurações do Gerente */}
+                        {/* Configurações do Gerente - ATUALIZADO com Switch */}
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                          <h5 className="text-sm font-medium text-green-900 mb-3">Comissões do Gerente</h5>
+                          <div className="flex items-center justify-between mb-4">
+                            <h5 className="text-sm font-medium text-green-900">Comissões do Gerente</h5>
+                            
+                            {/* 🔥 NOVO: Toggle para ativar/desativar bônus */}
+                            <div className="flex items-center space-x-2">
+                              <span className="text-sm text-green-700">Bônus:</span>
+                              <button
+                                type="button"
+                                onClick={() => setCommissionData(prev => ({
+                                  ...prev,
+                                  manager_bonus_active: !prev.manager_bonus_active
+                                }))}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                  commissionData.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                    commissionData.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                              <span className="text-sm font-medium text-green-700">
+                                {commissionData.manager_bonus_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </div>
+                          </div>
 
                           <div className="space-y-3">
-                            <div>
-                              <label className="block text-xs font-medium text-green-800 mb-1">
-                                Bônus a cada 35 arcadas (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input input-sm"
-                                value={commissionData.manager_bonus_35_arcadas}
-                                onChange={(e) => setCommissionData(prev => ({
-                                  ...prev,
-                                  manager_bonus_35_arcadas: parseFloat(e.target.value) || 0
-                                }))}
-                                placeholder="5000.00"
-                              />
+                            {/* Info sobre comissão base */}
+                            <div className="bg-blue-100 border border-blue-200 rounded p-3">
+                              <p className="text-sm text-blue-800">
+                                <strong>Comissão Base:</strong> Gerente ganha{' '}
+                                <strong>R$ {commissionData.consultant_value_per_arcada}/arcada</strong>{' '}
+                                por cada lead convertido da equipe (mesmo valor que consultores)
+                              </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-xs font-medium text-green-800 mb-1">
-                                  Bônus 50 arcadas (R$)
-                                </label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  className="input input-sm"
-                                  value={commissionData.manager_bonus_50_arcadas}
-                                  onChange={(e) => setCommissionData(prev => ({
-                                    ...prev,
-                                    manager_bonus_50_arcadas: parseFloat(e.target.value) || 0
-                                  }))}
-                                  placeholder="10000.00"
-                                />
-                              </div>
+                            {/* Campos de bônus - só mostrar se ativo */}
+                            {commissionData.manager_bonus_active ? (
+                              <>
+                                <div>
+                                  <label className="block text-xs font-medium text-green-800 mb-1">
+                                    Bônus a cada 35 arcadas (R$)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    className="input input-sm"
+                                    value={commissionData.manager_bonus_35_arcadas}
+                                    onChange={(e) => setCommissionData(prev => ({
+                                      ...prev,
+                                      manager_bonus_35_arcadas: parseFloat(e.target.value) || 0
+                                    }))}
+                                    placeholder="5000.00"
+                                  />
+                                </div>
 
-                              <div>
-                                <label className="block text-xs font-medium text-green-800 mb-1">
-                                  Bônus 75 arcadas (R$)
-                                </label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  className="input input-sm"
-                                  value={commissionData.manager_bonus_75_arcadas}
-                                  onChange={(e) => setCommissionData(prev => ({
-                                    ...prev,
-                                    manager_bonus_75_arcadas: parseFloat(e.target.value) || 0
-                                  }))}
-                                  placeholder="15000.00"
-                                />
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-xs font-medium text-green-800 mb-1">
+                                      Bônus 50 arcadas (R$)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      className="input input-sm"
+                                      value={commissionData.manager_bonus_50_arcadas}
+                                      onChange={(e) => setCommissionData(prev => ({
+                                        ...prev,
+                                        manager_bonus_50_arcadas: parseFloat(e.target.value) || 0
+                                      }))}
+                                      placeholder="10000.00"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-medium text-green-800 mb-1">
+                                      Bônus 75 arcadas (R$)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      className="input input-sm"
+                                      value={commissionData.manager_bonus_75_arcadas}
+                                      onChange={(e) => setCommissionData(prev => ({
+                                        ...prev,
+                                        manager_bonus_75_arcadas: parseFloat(e.target.value) || 0
+                                      }))}
+                                      placeholder="15000.00"
+                                    />
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="bg-gray-100 rounded p-3">
+                                <p className="text-sm text-gray-600">
+                                  Bônus desativado. Gerente receberá apenas comissão base por arcada da equipe.
+                                </p>
                               </div>
-                            </div>
+                            )}
                           </div>
                         </div>
 
-                        {/* Preview das Configurações */}
+                        {/* Preview das Configurações - ATUALIZADO */}
                         <div className="bg-secondary-50 border border-secondary-200 rounded-lg p-3">
                           <h5 className="text-xs font-medium text-secondary-900 mb-2">Resumo</h5>
                           <div className="text-xs text-secondary-700 space-y-1">
                             <div>• Consultor: R$ {commissionData.consultant_value_per_arcada}/arcada + bônus a cada {commissionData.consultant_bonus_every_arcadas} arcadas</div>
-                            <div>• Gerente: Bônus em 35, 50 e 75 arcadas da equipe</div>
+                            <div>• Gerente: R$ {commissionData.consultant_value_per_arcada}/arcada da equipe 
+                              {commissionData.manager_bonus_active ? 
+                                ` + bônus em 35, 50 e 75 arcadas` : 
+                                ` (sem bônus)`
+                              }
+                            </div>
+                            {commissionData.manager_bonus_active && (
+                              <div className="text-xs text-green-600 ml-4">
+                                → Bônus: R$ {commissionData.manager_bonus_35_arcadas} (35), R$ {commissionData.manager_bonus_50_arcadas} (50), R$ {commissionData.manager_bonus_75_arcadas} (75)
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
