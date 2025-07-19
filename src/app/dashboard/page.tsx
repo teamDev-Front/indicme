@@ -145,27 +145,58 @@ export default function ImprovedDashboardPage() {
 
   const fetchCommissionSettings = async () => {
     try {
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
+      // ✅ ATUALIZADO: Buscar do estabelecimento em vez da clínica
+
+      // Primeiro, buscar o estabelecimento do usuário
+      const { data: userEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
         .eq('user_id', profile!.id)
+        .eq('status', 'active')
         .single()
 
-      if (!userClinic) return
+      if (!userEstablishment) {
+        // Se não tem estabelecimento, usar valores padrão
+        setCommissionSettings({
+          valor_por_arcada: 750,
+          bonus_a_cada_arcadas: 7,
+          valor_bonus: 750
+        })
+        return
+      }
 
+      // Buscar configurações específicas do estabelecimento
       const { data: settings } = await supabase
-        .from('commission_settings')
-        .select('*')
-        .eq('clinic_id', userClinic.clinic_id)
+        .from('establishment_commissions')
+        .select('consultant_value_per_arcada, consultant_bonus_every_arcadas, consultant_bonus_value')
+        .eq('establishment_code', userEstablishment.establishment_code)
         .single()
 
       if (settings) {
-        setCommissionSettings(settings)
+        setCommissionSettings({
+          valor_por_arcada: settings.consultant_value_per_arcada || 750,
+          bonus_a_cada_arcadas: settings.consultant_bonus_every_arcadas || 7,
+          valor_bonus: settings.consultant_bonus_value || 750
+        })
+      } else {
+        // Usar valores padrão se não encontrar configurações
+        setCommissionSettings({
+          valor_por_arcada: 750,
+          bonus_a_cada_arcadas: 7,
+          valor_bonus: 750
+        })
       }
     } catch (error) {
       console.error('Erro ao buscar configurações:', error)
+      // Usar valores padrão em caso de erro
+      setCommissionSettings({
+        valor_por_arcada: 750,
+        bonus_a_cada_arcadas: 7,
+        valor_bonus: 750
+      })
     }
   }
+
 
   const fetchConsultantData = async (stats: DashboardStats) => {
     // Leads do consultor
@@ -182,30 +213,30 @@ export default function ImprovedDashboardPage() {
     // Calcular arcadas vendidas
     const arcadasVendidas = leadsData?.filter(l => l.status === 'converted')
       .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-    
+
     stats.totalArcadasVendidas = arcadasVendidas
 
     // Arcadas deste mês
     const thisMonth = new Date()
     const firstDayOfMonth = new Date(thisMonth.getFullYear(), thisMonth.getMonth(), 1)
-    const arcadasEstesMes = leadsData?.filter(l => 
+    const arcadasEstesMes = leadsData?.filter(l =>
       l.status === 'converted' && new Date(l.updated_at) >= firstDayOfMonth
     ).reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-    
+
     stats.arcadasEstesMes = arcadasEstesMes
 
     // Calcular ganhos
     const ganhoTotal = arcadasVendidas * commissionSettings.valor_por_arcada
     const bonusConquistados = Math.floor(arcadasVendidas / commissionSettings.bonus_a_cada_arcadas)
     const valorBonus = bonusConquistados * commissionSettings.valor_bonus
-    
+
     stats.ganhoTotal = ganhoTotal + valorBonus
     stats.bonusConquistados = bonusConquistados
 
     // Ganho deste mês
     const ganhoEstesMes = arcadasEstesMes * commissionSettings.valor_por_arcada
-    const bonusEstesMes = Math.floor((arcadasVendidas - (arcadasVendidas - arcadasEstesMes)) / commissionSettings.bonus_a_cada_arcadas) - 
-                         Math.floor((arcadasVendidas - arcadasEstesMes) / commissionSettings.bonus_a_cada_arcadas)
+    const bonusEstesMes = Math.floor((arcadasVendidas - (arcadasVendidas - arcadasEstesMes)) / commissionSettings.bonus_a_cada_arcadas) -
+      Math.floor((arcadasVendidas - arcadasEstesMes) / commissionSettings.bonus_a_cada_arcadas)
     stats.ganhoEstesMes = ganhoEstesMes + (bonusEstesMes * commissionSettings.valor_bonus)
 
     // Próximo bônus
@@ -253,7 +284,7 @@ export default function ImprovedDashboardPage() {
       // Calcular arcadas da equipe
       const arcadasVendidas = leadsData?.filter(l => l.status === 'converted')
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-      
+
       stats.totalArcadasVendidas = arcadasVendidas
 
       // Ganhos da equipe
@@ -303,7 +334,7 @@ export default function ImprovedDashboardPage() {
     // Calcular arcadas total da clínica
     const arcadasVendidas = leadsData?.filter(l => l.status === 'converted')
       .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-    
+
     stats.totalArcadasVendidas = arcadasVendidas
 
     // Ganhos totais da clínica
@@ -709,10 +740,10 @@ export default function ImprovedDashboardPage() {
                       </div>
                       {item.change && (
                         <div className={`ml-2 flex items-baseline text-sm font-semibold ${item.changeType === 'increase'
-                            ? 'text-success-600'
-                            : item.changeType === 'decrease'
-                              ? 'text-danger-600'
-                              : 'text-secondary-500'
+                          ? 'text-success-600'
+                          : item.changeType === 'decrease'
+                            ? 'text-danger-600'
+                            : 'text-secondary-500'
                           }`}>
                           {item.changeType === 'increase' && <ArrowTrendingUpIcon className="w-3 h-3 mr-1" />}
                           {item.changeType === 'decrease' && <ArrowTrendingDownIcon className="w-3 h-3 mr-1" />}
@@ -853,9 +884,9 @@ export default function ImprovedDashboardPage() {
                   <div className="flex items-center space-x-4">
                     <div className="flex-shrink-0">
                       <div className={`w-2 h-2 rounded-full ${lead.status === 'converted' ? 'bg-success-500' :
-                          lead.status === 'lost' ? 'bg-danger-500' :
-                            lead.status === 'contacted' ? 'bg-warning-500' :
-                              'bg-primary-500'
+                        lead.status === 'lost' ? 'bg-danger-500' :
+                          lead.status === 'contacted' ? 'bg-warning-500' :
+                            'bg-primary-500'
                         }`}></div>
                     </div>
                     <div className="min-w-0 flex-1">
@@ -869,10 +900,10 @@ export default function ImprovedDashboardPage() {
                   </div>
                   <div className="flex items-center space-x-3">
                     <span className={`badge ${lead.status === 'converted' ? 'badge-success' :
-                        lead.status === 'lost' ? 'badge-danger' :
-                          lead.status === 'contacted' ? 'badge-warning' :
-                            lead.status === 'scheduled' ? 'badge-primary' :
-                              'badge-secondary'
+                      lead.status === 'lost' ? 'badge-danger' :
+                        lead.status === 'contacted' ? 'badge-warning' :
+                          lead.status === 'scheduled' ? 'badge-primary' :
+                            'badge-secondary'
                       }`}>
                       {lead.status === 'new' ? 'Novo' :
                         lead.status === 'contacted' ? 'Contatado' :
@@ -997,8 +1028,8 @@ export default function ImprovedDashboardPage() {
                   <div className="mt-2 bg-secondary-200 rounded-full h-2">
                     <div
                       className="bg-warning-600 h-2 rounded-full"
-                      style={{ 
-                        width: `${Math.min(((commissionSettings.bonus_a_cada_arcadas - stats.proximoBonus) / commissionSettings.bonus_a_cada_arcadas) * 100, 100)}%` 
+                      style={{
+                        width: `${Math.min(((commissionSettings.bonus_a_cada_arcadas - stats.proximoBonus) / commissionSettings.bonus_a_cada_arcadas) * 100, 100)}%`
                       }}
                     ></div>
                   </div>

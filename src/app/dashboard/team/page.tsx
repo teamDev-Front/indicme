@@ -148,19 +148,19 @@ export default function TeamPage() {
             const { data: hierarchyData, error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .select(`
-                    created_at,
-                    consultant_id,
-                    users!hierarchies_consultant_id_fkey (
-                        id,
-                        email,
-                        full_name,
-                        phone,
-                        role,
-                        status,
-                        created_at,
-                        updated_at
-                    )
-                `)
+        created_at,
+        consultant_id,
+        users!hierarchies_consultant_id_fkey (
+          id,
+          email,
+          full_name,
+          phone,
+          role,
+          status,
+          created_at,
+          updated_at
+        )
+      `)
                 .eq('manager_id', profile.id)
 
             if (hierarchyError) throw hierarchyError
@@ -188,14 +188,16 @@ export default function TeamPage() {
                     const memberData = Array.isArray(member) ? member[0] : member
                     if (!memberData) return null
 
+                    // Buscar leads do membro
                     const { data: leadsData } = await supabase
                         .from('leads')
-                        .select('status, created_at')
+                        .select('status, created_at, arcadas_vendidas')
                         .eq('indicated_by', memberData.id)
 
+                    // ✅ CORREÇÃO: Buscar APENAS comissões do consultor específico
                     const { data: commissionsData } = await supabase
                         .from('commissions')
-                        .select('amount, status, created_at')
+                        .select('amount, status, created_at, type')
                         .eq('user_id', memberData.id)
 
                     const totalLeads = leadsData?.length || 0
@@ -204,9 +206,12 @@ export default function TeamPage() {
                     const lostLeads = leadsData?.filter(l => l.status === 'lost').length || 0
                     const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
+                    // ✅ CORREÇÃO: Somar TODAS as comissões do consultor (não filtrar por tipo)
                     const totalCommissions = commissionsData?.reduce((sum, c) => sum + c.amount, 0) || 0
-                    const paidCommissions = commissionsData?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-                    const pendingCommissions = commissionsData?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
+                    const paidCommissions = commissionsData?.filter(c => c.status === 'paid')
+                        .reduce((sum, c) => sum + c.amount, 0) || 0
+                    const pendingCommissions = commissionsData?.filter(c => c.status === 'pending')
+                        .reduce((sum, c) => sum + c.amount, 0) || 0
 
                     const lastLeadDate = leadsData && leadsData.length > 0
                         ? leadsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0].created_at
@@ -241,6 +246,7 @@ export default function TeamPage() {
             const validMembers = teamMembersWithStats.filter(Boolean) as TeamMember[]
             setTeamMembers(validMembers)
 
+            // ✅ CORREÇÃO: Calcular stats da equipe corretamente
             const stats: TeamStats = {
                 totalMembers: validMembers.length,
                 activeMembers: validMembers.filter(m => m.status === 'active').length,
@@ -255,7 +261,7 @@ export default function TeamPage() {
             setTeamStats(stats)
 
         } catch (error: any) {
-            console.error('Erro ao buscar dados da equipe:', error)
+            console.error('❌ Erro ao buscar dados da equipe:', error)
             toast.error('Erro ao carregar dados da equipe')
         } finally {
             setLoading(false)
@@ -719,10 +725,11 @@ export default function TeamPage() {
                                 </div>
                             </div>
                             <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Total</p>
+                                <p className="text-xs font-medium text-secondary-500">Membros</p>
                                 <p className="text-xs font-bold text-primary-600">
                                     R$ {teamStats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                                 </p>
+                                <p className="text-xs text-secondary-400">Comissões</p>
                             </div>
                         </div>
                     </div>

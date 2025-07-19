@@ -49,6 +49,7 @@ interface Commission {
 }
 
 interface CommissionStats {
+  total: number
   totalPending: number
   totalPaid: number
   totalCancelled: number
@@ -62,6 +63,7 @@ export default function CommissionsPage() {
   const { profile } = useAuth()
   const [commissions, setCommissions] = useState<Commission[]>([])
   const [stats, setStats] = useState<CommissionStats>({
+    total: 0,
     totalPending: 0,
     totalPaid: 0,
     totalCancelled: 0,
@@ -88,95 +90,105 @@ export default function CommissionsPage() {
     try {
       setLoading(true)
 
+      if (!profile) return
+
+      // Buscar clínica do usuário
+      const { data: userClinic } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile.id)
+        .single()
+
+      if (!userClinic) return
+
       let query = supabase
         .from('commissions')
         .select(`
         *,
-        leads (
+        lead:leads!commissions_lead_id_fkey (
           id,
           full_name,
           phone,
           status,
-          created_at,
-          arcadas_vendidas
+          establishment_code
         ),
-        users (
+        user:users!commissions_user_id_fkey (
+          id,
           full_name,
-          email
+          email,
+          role
+        ),
+        establishment:establishment_codes!commissions_establishment_code_fkey (
+          code,
+          name
         )
       `)
+        .eq('clinic_id', userClinic.clinic_id)
         .order('created_at', { ascending: false })
 
-      // Filtrar baseado no role do usuário
-      if (profile?.role === 'consultant') {
+      // ✅ CORREÇÃO: Filtros por role corrigidos
+      if (profile.role === 'consultant') {
         query = query.eq('user_id', profile.id)
-      } else if (profile?.role === 'manager') {
-        // Manager vê comissões de sua equipe + próprias
+      } else if (profile.role === 'manager') {
+        // Buscar consultores da equipe DO GERENTE
         const { data: hierarchy } = await supabase
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
 
         const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+
+        // ✅ CORREÇÃO: Incluir o próprio gerente E os consultores da equipe
         consultantIds.push(profile.id)
 
-        query = query.in('user_id', consultantIds)
+        if (consultantIds.length > 0) {
+          query = query.in('user_id', consultantIds)
+        } else {
+          // Se não tem equipe, mostrar só as próprias comissões
+          query = query.eq('user_id', profile.id)
+        }
       }
-      // Clinic admin/viewer veem todas (sem filtros adicionais)
+      // clinic_admin e clinic_viewer veem todas as comissões (sem filtro adicional)
 
       const { data, error } = await query
 
-      if (error) {
-        throw error
-      }
+      if (error) throw error
+      setCommissions(data || [])
 
-      const commissionsData = data || []
-      setCommissions(commissionsData)
+      // ✅ CORREÇÃO: Calcular estatísticas compatíveis com a interface CommissionStats
+      const totalCommissions = data?.reduce((sum, c) => sum + c.amount, 0) || 0
+      const paidCommissions = data?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
+      const pendingCommissions = data?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
+      const cancelledCommissions = data?.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + c.amount, 0) || 0
 
-      // Calcular estatísticas baseadas nas arcadas
-      const pending = commissionsData
-        .filter(c => c.status === 'pending')
-        .reduce((sum, c) => sum + c.amount, 0)
+      // Calcular comissões deste mês
+      const thisMonth = new Date()
+      const firstDayOfMonth = new Date(thisMonth.getFullYear(), thisMonth.getMonth(), 1)
+      const monthlyCommissions = data?.filter(c =>
+        new Date(c.created_at) >= firstDayOfMonth && c.status === 'paid'
+      ).reduce((sum, c) => sum + c.amount, 0) || 0
 
-      const paid = commissionsData
-        .filter(c => c.status === 'paid')
-        .reduce((sum, c) => sum + c.amount, 0)
+      // Calcular total de arcadas
+      const totalArcadas = data?.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0) || 0
 
-      const cancelled = commissionsData
-        .filter(c => c.status === 'cancelled')
-        .reduce((sum, c) => sum + c.amount, 0)
-
-      // Total de arcadas vendidas
-      const totalArcadas = commissionsData
-        .reduce((sum, c) => sum + (c.leads?.arcadas_vendidas || 1), 0)
-
-      const average = commissionsData.length > 0
-        ? commissionsData.reduce((sum, c) => sum + c.amount, 0) / commissionsData.length
-        : 0
-
-      // Earnings deste mês
-      const currentMonth = new Date()
-      const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)
-      const monthlyEarnings = commissionsData
-        .filter(c => c.status === 'paid' && new Date(c.paid_at || c.created_at) >= firstDayOfMonth)
-        .reduce((sum, c) => sum + c.amount, 0)
-
-      // Taxa de conversão (comissões pagas vs total)
-      const conversionRate = commissionsData.length > 0
-        ? (commissionsData.filter(c => c.status === 'paid').length / commissionsData.length) * 100
-        : 0
+      // Calcular taxa de conversão (leads convertidos / total de leads)
+      const totalLeads = data?.filter(c => c.lead).length || 0
+      const convertedLeads = data?.filter(c => c.lead?.status === 'converted').length || 0
+      const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
       setStats({
-        totalPending: pending,
-        totalPaid: paid,
-        totalCancelled: cancelled,
-        averageCommission: average,
-        monthlyEarnings,
-        conversionRate,
-        totalArcadas, // Adicione este campo às estatísticas
+        total: data?.length || 0,
+        totalPending: pendingCommissions,
+        totalPaid: paidCommissions,
+        totalCancelled: cancelledCommissions,
+        averageCommission: data?.length > 0 ? totalCommissions / data.length : 0,
+        monthlyEarnings: monthlyCommissions,
+        conversionRate: conversionRate,
+        totalArcadas: totalArcadas
       })
+
     } catch (error: any) {
-      console.error('Erro ao buscar comissões:', error)
+      console.error('❌ Erro ao buscar comissões:', error)
       toast.error('Erro ao carregar comissões')
     } finally {
       setLoading(false)
