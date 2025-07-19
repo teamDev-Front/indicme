@@ -39,6 +39,7 @@ interface Lead {
   notes: string | null
   status: 'new' | 'contacted' | 'scheduled' | 'converted' | 'lost'
   indicated_by: string
+  establishment_code?: string
   clinic_id: string
   created_at: string
   updated_at: string
@@ -869,6 +870,8 @@ export default function LeadsPage() {
           }}
           onConfirm={handleConfirmConversion}
           leadName={selectedLeadForConversion.full_name}
+          establishmentCode={selectedLeadForConversion.establishment_code}
+          consultantId={selectedLeadForConversion.indicated_by}
         />
       )}
     </div>

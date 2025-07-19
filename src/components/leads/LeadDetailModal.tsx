@@ -23,20 +23,14 @@ interface Lead {
   status: 'new' | 'contacted' | 'scheduled' | 'converted' | 'lost'
   indicated_by: string
   clinic_id: string
+  arcadas_vendidas?: number
+  converted_at?: string
   created_at: string
   updated_at: string
   users?: {
     full_name: string
     email: string
   }
-  commissions?: Array<{
-    id: string
-    amount: number
-    percentage: number
-    type: string
-    status: string
-    created_at: string
-  }>
 }
 
 interface LeadDetailModalProps {
@@ -69,37 +63,35 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
 
     try {
       setLoading(true)
+      console.log('🔍 Buscando detalhes do lead:', leadId)
       
+      // Query corrigida
       const { data, error } = await supabase
         .from('leads')
         .select(`
           *,
-          users:indicated_by (
+          users!leads_indicated_by_fkey (
             full_name,
             email
-          ),
-          commissions (
-            id,
-            amount,
-            percentage,
-            type,
-            status,
-            created_at
           )
         `)
         .eq('id', leadId)
         .single()
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Erro na query:', error)
+        throw error
+      }
 
+      console.log('✅ Lead encontrado:', data)
       setLead(data)
       setEditForm({
         notes: data.notes || '',
         status: data.status
       })
     } catch (error: any) {
-      console.error('Erro ao buscar detalhes do lead:', error)
-      toast.error('Erro ao carregar detalhes do lead')
+      console.error('❌ Erro ao buscar detalhes do lead:', error)
+      toast.error(`Erro ao carregar detalhes: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -176,14 +168,6 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
   const canEdit = profile?.role === 'clinic_admin' || profile?.role === 'manager' || 
     (profile?.role === 'consultant' && lead?.indicated_by === profile.id)
 
-  const formatCurrency = (amount: number) => {
-    return amount.toLocaleString('pt-BR', { 
-      style: 'currency', 
-      currency: 'BRL',
-      minimumFractionDigits: 2 
-    })
-  }
-
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('pt-BR', {
       day: '2-digit',
@@ -248,7 +232,8 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
 
                 {loading ? (
                   <div className="flex items-center justify-center p-12">
-                    <div className="loading-spinner w-8 h-8"></div>
+                    <div className="loading-spinner w-8 h-8 mr-3"></div>
+                    <span className="text-secondary-600">Carregando dados do lead...</span>
                   </div>
                 ) : lead ? (
                   <div className="p-6 space-y-6">
@@ -317,6 +302,14 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                             <div className="text-sm text-secondary-500 mt-1">Status atual</div>
                           </div>
 
+                          {/* Mostrar arcadas se convertido */}
+                          {lead.status === 'converted' && lead.arcadas_vendidas && (
+                            <div>
+                              <div className="font-medium text-primary-900">{lead.arcadas_vendidas} arcada{lead.arcadas_vendidas > 1 ? 's' : ''}</div>
+                              <div className="text-sm text-secondary-500">Vendidas</div>
+                            </div>
+                          )}
+
                           <div className="flex items-center">
                             <CalendarIcon className="h-5 w-5 text-secondary-400 mr-3" />
                             <div>
@@ -324,6 +317,17 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                               <div className="text-sm text-secondary-500">Data de criação</div>
                             </div>
                           </div>
+
+                          {/* Data de conversão se convertido */}
+                          {lead.status === 'converted' && lead.converted_at && (
+                            <div className="flex items-center">
+                              <CalendarIcon className="h-5 w-5 text-success-400 mr-3" />
+                              <div>
+                                <div className="font-medium text-success-900">{formatDate(lead.converted_at)}</div>
+                                <div className="text-sm text-success-600">Data de conversão</div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -364,41 +368,6 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                         </div>
                       </div>
                     )}
-
-                    {/* Comissões */}
-                    {/* {lead.commissions && lead.commissions.length > 0 && (
-                      <div>
-                        <h4 className="text-lg font-medium text-secondary-900 mb-4">Comissões</h4>
-                        <div className="space-y-3">
-                          {lead.commissions.map((commission) => (
-                            <div key={commission.id} className="flex items-center justify-between p-3 bg-secondary-50 rounded-lg">
-                              <div>
-                                <div className="font-medium text-secondary-900">
-                                  {commission.type === 'consultant' ? 'Consultor' : 'Manager'}
-                                </div>
-                                <div className="text-sm text-secondary-500">
-                                  {commission.percentage}% de comissão
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="font-medium text-secondary-900">
-                                  {formatCurrency(commission.amount)}
-                                </div>
-                                <div className={`text-xs ${
-                                  commission.status === 'paid' ? 'text-success-600' :
-                                  commission.status === 'pending' ? 'text-warning-600' :
-                                  'text-danger-600'
-                                }`}>
-                                  {commission.status === 'paid' ? 'Pago' :
-                                   commission.status === 'pending' ? 'Pendente' :
-                                   'Cancelado'}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )} */}
 
                     {/* Notes Section */}
                     <div>
@@ -465,15 +434,12 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                             </div>
                           </div>
                         )}
-                        {lead.commissions?.some(c => c.status === 'paid') && (
+                        {lead.status === 'converted' && lead.converted_at && (
                           <div className="flex items-center space-x-3">
                             <div className="w-2 h-2 bg-success-500 rounded-full"></div>
                             <div>
-                              <div className="text-sm font-medium text-secondary-900">Comissão paga</div>
-                              <div className="text-xs text-secondary-500">
-                                {lead.commissions.find(c => c.status === 'paid') && 
-                                 formatDate(lead.commissions.find(c => c.status === 'paid')!.created_at)}
-                              </div>
+                              <div className="text-sm font-medium text-secondary-900">Lead convertido</div>
+                              <div className="text-xs text-secondary-500">{formatDate(lead.converted_at)}</div>
                             </div>
                           </div>
                         )}
@@ -482,7 +448,13 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                   </div>
                 ) : (
                   <div className="text-center py-12">
-                    <p className="text-secondary-500">Lead não encontrado.</p>
+                    <p className="text-secondary-500">Lead não encontrado ou erro ao carregar.</p>
+                    <button
+                      onClick={fetchLeadDetails}
+                      className="btn btn-primary mt-4"
+                    >
+                      Tentar Novamente
+                    </button>
                   </div>
                 )}
 
