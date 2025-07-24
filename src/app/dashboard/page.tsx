@@ -1,7 +1,7 @@
-// src/app/dashboard/page.tsx - VERSÃO CORRIGIDA BASEADA EM ESTABELECIMENTOS
+// src/app/dashboard/page.tsx - VERSÃO CORRIGIDA COMPLETA
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import { motion } from 'framer-motion'
@@ -22,7 +22,7 @@ import {
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 
-// Interfaces
+// Interfaces corrigidas
 interface DashboardStats {
   totalLeads: number
   convertedLeads: number
@@ -85,63 +85,71 @@ export default function DashboardPage() {
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([])
   const [topPerformers, setTopPerformers] = useState<TopPerformer[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const supabase = createClient()
 
-  useEffect(() => {
-    if (profile) {
-      fetchDashboardData()
+  // CORREÇÃO 1: Usar useCallback para evitar problemas de stale closure
+  const fetchDashboardData = useCallback(async () => {
+    if (!profile?.id) {
+      console.log('⚠️ Profile não disponível ainda')
+      return
     }
-  }, [profile])
 
-  const fetchDashboardData = async () => {
     try {
       setLoading(true)
+      setError(null)
+      console.log('🔍 Iniciando busca de dados do dashboard para:', profile.role)
 
       // Buscar dados baseado no role do usuário
-      if (profile?.role === 'clinic_admin' || profile?.role === 'clinic_viewer') {
+      if (profile.role === 'clinic_admin' || profile.role === 'clinic_viewer') {
         await fetchClinicAdminData()
-      } else if (profile?.role === 'manager') {
+      } else if (profile.role === 'manager') {
         await fetchManagerData()
-      } else if (profile?.role === 'consultant') {
+      } else if (profile.role === 'consultant') {
         await fetchConsultantData()
+      } else {
+        throw new Error(`Role não reconhecido: ${profile.role}`)
       }
 
+      console.log('✅ Dashboard carregado com sucesso')
     } catch (error: any) {
       console.error('❌ Erro ao buscar dados do dashboard:', error)
+      setError(error.message)
       toast.error('Erro ao carregar dados do dashboard')
     } finally {
       setLoading(false)
     }
-  }
+  }, [profile?.id, profile?.role]) // CORREÇÃO: Dependências específicas
 
-  // CORREÇÃO: Função para admin baseada em estabelecimentos
-  const fetchClinicAdminData = async () => {
+  // CORREÇÃO 2: useEffect mais robusto
+  useEffect(() => {
+    if (profile?.id) {
+      fetchDashboardData()
+    }
+  }, [profile?.id, fetchDashboardData])
+
+  // CORREÇÃO 3: Função para admin baseada em estabelecimentos melhorada
+  const fetchClinicAdminData = useCallback(async () => {
     try {
-      console.log('🔍 Buscando dados para clinic admin baseado em estabelecimentos...')
+      console.log('🔍 Buscando dados para clinic admin...')
 
-      // Buscar clínica do usuário
-      const { data: userClinic } = await supabase
+      // Buscar clínica do usuário com validação adequada
+      const { data: userClinic, error: userClinicError } = await supabase
         .from('user_clinics')
         .select('clinic_id')
         .eq('user_id', profile?.id)
         .single()
 
-      if (!userClinic) {
-        console.warn('⚠️ Clínica não encontrada para o admin')
+      if (userClinicError || !userClinic?.clinic_id) {
+        console.warn('⚠️ Clínica não encontrada para o admin:', userClinicError?.message)
         return
       }
 
-      // 1. Buscar todos os estabelecimentos ativos
-      const { data: establishments } = await supabase
-        .from('establishment_codes')
-        .select('code, name')
-        .eq('is_active', true)
+      const clinicId = userClinic.clinic_id
+      console.log('✅ Clinic ID:', clinicId)
 
-      const establishmentCodes = establishments?.map(e => e.code) || []
-      const establishmentCount = establishments?.length || 0
-
-      // 2. Buscar todos os leads da clínica
-      const { data: allLeads } = await supabase
+      // 2. Buscar todos os leads da clínica com melhor tratamento
+      const { data: allLeads, error: leadsError } = await supabase
         .from('leads')
         .select(`
           id,
@@ -150,20 +158,28 @@ export default function DashboardPage() {
           created_at,
           establishment_code,
           indicated_by,
+          converted_at,
           users!leads_indicated_by_fkey (
             full_name,
             role
           )
         `)
-        .eq('clinic_id', userClinic.clinic_id)
-        .order('created_at', { ascending: false })
+        .eq('clinic_id', clinicId)
+
+      if (leadsError) {
+        console.error('❌ Erro ao buscar leads:', leadsError)
+        throw leadsError
+      }
 
       console.log(`📊 Total de leads encontrados: ${allLeads?.length || 0}`)
 
-      // 3. Calcular estatísticas dos leads
+      // 3. Calcular estatísticas básicas
       const totalLeads = allLeads?.length || 0
       const convertedLeads = allLeads?.filter(l => l.status === 'converted').length || 0
-      const pendingLeads = allLeads?.filter(l => ['new', 'contacted', 'scheduled'].includes(l.status)).length || 0
+      const pendingLeads = allLeads?.filter(l =>
+        ['new', 'contacted', 'scheduled'].includes(l.status)
+      ).length || 0
+
       const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
       // 4. Calcular arcadas totais
@@ -171,45 +187,58 @@ export default function DashboardPage() {
         ?.filter(l => l.status === 'converted')
         ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
 
-      // 5. NOVA LÓGICA: Calcular receita baseada nas configurações por estabelecimento
+      // 5. Buscar estabelecimentos e calcular receita
+      const { data: establishments } = await supabase
+        .from('establishment_codes')
+        .select('code, name')
+        .eq('is_active', true)
+
       let totalRevenue = 0
-      const revenueByEstablishment = new Map<string, number>()
+      if (establishments) {
+        for (const establishment of establishments) {
+          // Buscar configuração do estabelecimento
+          const { data: settings } = await supabase
+            .from('establishment_commissions')
+            .select('consultant_value_per_arcada')
+            .eq('establishment_code', establishment.code)
+            .single()
 
-      // Para cada estabelecimento, buscar sua configuração de valor
-      for (const establishment of establishments || []) {
-        const { data: settings } = await supabase
-          .from('establishment_commissions')
-          .select('consultant_value_per_arcada')
-          .eq('establishment_code', establishment.code)
-          .single()
+          const valorPorArcada = settings?.consultant_value_per_arcada || 750
 
-        const valorPorArcada = settings?.consultant_value_per_arcada || 750
+          // Calcular arcadas deste estabelecimento
+          const arcadasEstabelecimento = allLeads
+            ?.filter(l =>
+              l.establishment_code === establishment.code &&
+              l.status === 'converted'
+            )
+            ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
 
-        // Calcular arcadas convertidas neste estabelecimento
-        const arcadasEstabelecimento = allLeads
-          ?.filter(l => l.establishment_code === establishment.code && l.status === 'converted')
-          ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-
-        const revenueEstabelecimento = arcadasEstabelecimento * valorPorArcada
-        revenueByEstablishment.set(establishment.code, revenueEstabelecimento)
-        totalRevenue += revenueEstabelecimento
+          totalRevenue += arcadasEstabelecimento * valorPorArcada
+        }
       }
 
-      console.log('💰 Receita por estabelecimento:', Object.fromEntries(revenueByEstablishment))
       console.log('💰 Receita total calculada:', totalRevenue)
 
       // 6. Buscar comissões da clínica
-      const { data: commissions } = await supabase
+      const { data: commissions, error: commissionsError } = await supabase
         .from('commissions')
         .select('amount, status, created_at, type, user_id')
-        .eq('clinic_id', userClinic.clinic_id)
+        .eq('clinic_id', clinicId)
 
-      const totalCommissions = commissions?.reduce((sum, c) => sum + c.amount, 0) || 0
-      const paidCommissions = commissions?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-      const pendingCommissions = commissions?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
+      if (commissionsError) {
+        console.warn('⚠️ Erro ao buscar comissões:', commissionsError)
+      }
+
+      const totalCommissions = commissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const paidCommissions = commissions
+        ?.filter(c => c.status === 'paid')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const pendingCommissions = commissions
+        ?.filter(c => c.status === 'pending')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
 
       // 7. Contar usuários ativos
-      const { data: users } = await supabase
+      const { data: users, error: usersError } = await supabase
         .from('users')
         .select(`
           id,
@@ -217,8 +246,12 @@ export default function DashboardPage() {
           status,
           user_clinics!inner(clinic_id)
         `)
-        .eq('user_clinics.clinic_id', userClinic.clinic_id)
+        .eq('user_clinics.clinic_id', clinicId)
         .eq('status', 'active')
+
+      if (usersError) {
+        console.warn('⚠️ Erro ao buscar usuários:', usersError)
+      }
 
       const activeConsultants = users?.filter(u => u.role === 'consultant').length || 0
       const activeManagers = users?.filter(u => u.role === 'manager').length || 0
@@ -233,7 +266,9 @@ export default function DashboardPage() {
       ).length || 0
 
       const thisMonthConversions = allLeads?.filter(l =>
-        l.status === 'converted' && new Date(l.created_at) >= startOfMonth
+        l.status === 'converted' &&
+        l.converted_at &&
+        new Date(l.converted_at) >= startOfMonth
       ).length || 0
 
       // 9. Atualizar estado
@@ -251,68 +286,61 @@ export default function DashboardPage() {
         activeManagers,
         thisMonthLeads,
         thisMonthConversions,
-        establishmentCount,
+        establishmentCount: establishments?.length || 0,
       })
 
-      // 10. Buscar atividades recentes
-      await fetchRecentActivity(userClinic.clinic_id)
+      // 10. Buscar atividades recentes e top performers
+      await Promise.all([
+        fetchRecentActivity(clinicId),
+        fetchTopPerformers(clinicId)
+      ])
 
-      // 11. Buscar top performers
-      await fetchTopPerformers(userClinic.clinic_id)
-
-      console.log('✅ Dados do dashboard carregados com sucesso')
+      console.log('✅ Dados do clinic admin carregados com sucesso')
 
     } catch (error) {
       console.error('❌ Erro ao buscar dados do clinic admin:', error)
       throw error
     }
-  }
+  }, [profile?.id])
 
-  // CORREÇÃO: Função para manager baseada em estabelecimentos
-  const fetchManagerData = async () => {
+  // CORREÇÃO 4: Função para manager melhorada
+  const fetchManagerData = useCallback(async () => {
     try {
-      console.log('🔍 Buscando dados para manager baseado em estabelecimentos...')
+      console.log('🔍 Buscando dados para manager...')
 
-      // Buscar clínica do manager
-      const { data: userClinic } = await supabase
+      // 1. Buscar clínica do manager
+      const { data: userClinic, error: clinicError } = await supabase
         .from('user_clinics')
         .select('clinic_id')
         .eq('user_id', profile?.id)
         .single()
 
-      if (!userClinic) return
+      if (clinicError || !userClinic) {
+        throw new Error('Clínica do manager não encontrada')
+      }
 
-      // Buscar estabelecimentos do manager
-      const { data: managerEstablishments } = await supabase
-        .from('user_establishments')
-        .select(`
-          establishment_code,
-          establishment_codes!user_establishments_establishment_code_fkey (
-            code,
-            name
-          )
-        `)
-        .eq('user_id', profile?.id)
-        .eq('status', 'active')
-
-      const establishmentCodes = managerEstablishments?.map(me => me.establishment_code) || []
-
-      // Buscar consultores da equipe
-      const { data: teamConsultants } = await supabase
+      // 2. Buscar consultores da equipe
+      const { data: teamConsultants, error: teamError } = await supabase
         .from('hierarchies')
         .select('consultant_id')
         .eq('manager_id', profile?.id)
 
+      if (teamError) {
+        console.warn('⚠️ Erro ao buscar equipe:', teamError)
+      }
+
       const consultantIds = teamConsultants?.map(h => h.consultant_id) || []
-      if (profile) {
+      // Incluir o próprio manager
+      if (profile?.id) {
         consultantIds.push(profile.id)
       }
 
-      // Buscar leads da equipe (por consultor + estabelecimento)
-      let teamLeads: any[] = []
+      console.log(`👥 IDs da equipe (incluindo manager): ${consultantIds.length}`)
 
+      // 3. Buscar leads da equipe
+      let teamLeads: any[] = []
       if (consultantIds.length > 0) {
-        const { data: leads } = await supabase
+        const { data: leads, error: leadsError } = await supabase
           .from('leads')
           .select(`
             id,
@@ -321,76 +349,68 @@ export default function DashboardPage() {
             created_at,
             establishment_code,
             indicated_by,
+            converted_at,
             users!leads_indicated_by_fkey (
               full_name,
               role
             )
           `)
           .in('indicated_by', consultantIds)
-          .order('created_at', { ascending: false })
 
-        teamLeads = leads || []
+        if (leadsError) {
+          console.warn('⚠️ Erro ao buscar leads da equipe:', leadsError)
+        } else {
+          teamLeads = leads || []
+        }
       }
 
-      // Filtrar leads pelos estabelecimentos do manager
-      const filteredLeads = teamLeads.filter(lead =>
-        establishmentCodes.includes(lead.establishment_code)
-      )
+      console.log(`📊 Leads da equipe encontrados: ${teamLeads.length}`)
 
-      console.log(`📊 Leads da equipe encontrados: ${filteredLeads.length}`)
-
-      // Calcular estatísticas
-      const totalLeads = filteredLeads.length
-      const convertedLeads = filteredLeads.filter(l => l.status === 'converted').length
-      const pendingLeads = filteredLeads.filter(l => ['new', 'contacted', 'scheduled'].includes(l.status)).length
+      // 4. Calcular estatísticas
+      const totalLeads = teamLeads.length
+      const convertedLeads = teamLeads.filter(l => l.status === 'converted').length
+      const pendingLeads = teamLeads.filter(l =>
+        ['new', 'contacted', 'scheduled'].includes(l.status)
+      ).length
       const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
-      const totalArcadas = filteredLeads
+      const totalArcadas = teamLeads
         .filter(l => l.status === 'converted')
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
-      // CORREÇÃO: Calcular receita baseada nas configurações dos estabelecimentos
-      let totalRevenue = 0
+      // 5. Calcular receita (usar configuração padrão se não tiver específica)
+      const totalRevenue = totalArcadas * 750 // Valor padrão, pode ser refinado
 
-      for (const establishmentCode of establishmentCodes) {
-        const { data: settings } = await supabase
-          .from('establishment_commissions')
-          .select('consultant_value_per_arcada')
-          .eq('establishment_code', establishmentCode)
-          .single()
-
-        const valorPorArcada = settings?.consultant_value_per_arcada || 750
-
-        const arcadasEstabelecimento = filteredLeads
-          .filter(l => l.establishment_code === establishmentCode && l.status === 'converted')
-          .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
-
-        totalRevenue += arcadasEstabelecimento * valorPorArcada
-      }
-
-      // Buscar comissões da equipe
+      // 6. Buscar comissões da equipe
       const { data: teamCommissions } = await supabase
         .from('commissions')
         .select('amount, status, type')
         .in('user_id', consultantIds)
 
-      const totalCommissions = teamCommissions?.reduce((sum, c) => sum + c.amount, 0) || 0
-      const paidCommissions = teamCommissions?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-      const pendingCommissions = teamCommissions?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
+      const totalCommissions = teamCommissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const paidCommissions = teamCommissions
+        ?.filter(c => c.status === 'paid')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const pendingCommissions = teamCommissions
+        ?.filter(c => c.status === 'pending')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
 
-      // Dados do mês atual
+      // 7. Dados do mês atual
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
 
-      const thisMonthLeads = filteredLeads.filter(l =>
+      const thisMonthLeads = teamLeads.filter(l =>
         new Date(l.created_at) >= startOfMonth
       ).length
 
-      const thisMonthConversions = filteredLeads.filter(l =>
-        l.status === 'converted' && new Date(l.created_at) >= startOfMonth
+      const thisMonthConversions = teamLeads.filter(l =>
+        l.status === 'converted' &&
+        l.converted_at &&
+        new Date(l.converted_at) >= startOfMonth
       ).length
 
+      // 8. Atualizar estado
       setStats({
         totalLeads,
         convertedLeads,
@@ -405,109 +425,90 @@ export default function DashboardPage() {
         activeManagers: 1,
         thisMonthLeads,
         thisMonthConversions,
-        establishmentCount: establishmentCodes.length,
+        establishmentCount: 1, // Manager tem 1 estabelecimento
       })
 
+      // 9. Buscar atividades recentes
       await fetchRecentActivity(userClinic.clinic_id, consultantIds)
+
+      console.log('✅ Dados do manager carregados com sucesso')
 
     } catch (error) {
       console.error('❌ Erro ao buscar dados do manager:', error)
       throw error
     }
-  }
+  }, [profile?.id])
 
-  // CORREÇÃO: Função para consultant baseada em estabelecimentos
-  const fetchConsultantData = async () => {
+  // CORREÇÃO 5: Função para consultant melhorada
+  const fetchConsultantData = useCallback(async () => {
     try {
-      console.log('🔍 Buscando dados para consultant baseado em estabelecimentos...')
+      console.log('🔍 Buscando dados para consultant...')
 
-      // Buscar estabelecimentos do consultor
-      const { data: consultantEstablishments } = await supabase
-        .from('user_establishments')
-        .select(`
-          establishment_code,
-          establishment_codes!user_establishments_establishment_code_fkey (
-            code,
-            name
-          )
-        `)
-        .eq('user_id', profile?.id)
-        .eq('status', 'active')
-
-      const establishmentCodes = consultantEstablishments?.map(ce => ce.establishment_code) || []
-
-      // Buscar leads do consultor
-      const { data: consultantLeads } = await supabase
+      // 1. Buscar leads do consultor
+      const { data: consultantLeads, error: leadsError } = await supabase
         .from('leads')
         .select(`
           id,
           status,
           arcadas_vendidas,
           created_at,
-          establishment_code
+          establishment_code,
+          converted_at
         `)
         .eq('indicated_by', profile?.id)
-        .order('created_at', { ascending: false })
 
-      // Filtrar pelos estabelecimentos do consultor
-      const filteredLeads = consultantLeads?.filter(lead =>
-        establishmentCodes.includes(lead.establishment_code)
-      ) || []
+      if (leadsError) {
+        console.warn('⚠️ Erro ao buscar leads do consultor:', leadsError)
+      }
 
-      console.log(`📊 Leads do consultor encontrados: ${filteredLeads.length}`)
+      const leads = consultantLeads || []
+      console.log(`📊 Leads do consultor encontrados: ${leads.length}`)
 
-      // Calcular estatísticas
-      const totalLeads = filteredLeads.length
-      const convertedLeads = filteredLeads.filter(l => l.status === 'converted').length
-      const pendingLeads = filteredLeads.filter(l => ['new', 'contacted', 'scheduled'].includes(l.status)).length
+      // 2. Calcular estatísticas
+      const totalLeads = leads.length
+      const convertedLeads = leads.filter(l => l.status === 'converted').length
+      const pendingLeads = leads.filter(l =>
+        ['new', 'contacted', 'scheduled'].includes(l.status)
+      ).length
       const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
-      const totalArcadas = filteredLeads
+      const totalArcadas = leads
         .filter(l => l.status === 'converted')
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
-      // CORREÇÃO: Calcular receita baseada nas configurações dos estabelecimentos
-      let totalRevenue = 0
+      // 3. Calcular receita (usar configuração padrão)
+      const totalRevenue = totalArcadas * 750
 
-      for (const establishmentCode of establishmentCodes) {
-        const { data: settings } = await supabase
-          .from('establishment_commissions')
-          .select('consultant_value_per_arcada')
-          .eq('establishment_code', establishmentCode)
-          .single()
-
-        const valorPorArcada = settings?.consultant_value_per_arcada || 750
-
-        const arcadasEstabelecimento = filteredLeads
-          .filter(l => l.establishment_code === establishmentCode && l.status === 'converted')
-          .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
-
-        totalRevenue += arcadasEstabelecimento * valorPorArcada
-      }
-
-      // Buscar comissões do consultor
+      // 4. Buscar comissões do consultor
       const { data: consultantCommissions } = await supabase
         .from('commissions')
         .select('amount, status, type')
         .eq('user_id', profile?.id)
 
-      const totalCommissions = consultantCommissions?.reduce((sum, c) => sum + c.amount, 0) || 0
-      const paidCommissions = consultantCommissions?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-      const pendingCommissions = consultantCommissions?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
+      const totalCommissions = consultantCommissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const paidCommissions = consultantCommissions
+        ?.filter(c => c.status === 'paid')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const pendingCommissions = consultantCommissions
+        ?.filter(c => c.status === 'pending')
+        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
 
-      // Dados do mês atual
+      // 5. Dados do mês atual
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
 
-      const thisMonthLeads = filteredLeads.filter(l =>
+      const thisMonthLeads = leads.filter(l =>
         new Date(l.created_at) >= startOfMonth
       ).length
 
-      const thisMonthConversions = filteredLeads.filter(l =>
-        l.status === 'converted' && new Date(l.created_at) >= startOfMonth
+      const thisMonthConversions = leads.filter(l =>
+        l.status === 'converted' &&
+        l.converted_at &&
+        new Date(l.converted_at) >= startOfMonth
       ).length
 
+      // 6. Atualizar estado
       setStats({
         totalLeads,
         convertedLeads,
@@ -522,20 +523,23 @@ export default function DashboardPage() {
         activeManagers: 0,
         thisMonthLeads,
         thisMonthConversions,
-        establishmentCount: establishmentCodes.length,
+        establishmentCount: 1,
       })
+
+      console.log('✅ Dados do consultant carregados com sucesso')
 
     } catch (error) {
       console.error('❌ Erro ao buscar dados do consultant:', error)
       throw error
     }
-  }
+  }, [profile?.id])
 
-  const fetchRecentActivity = async (clinicId: string, userIds?: string[]) => {
+  // CORREÇÃO 6: Função de atividades recentes melhorada
+  const fetchRecentActivity = useCallback(async (clinicId: string, userIds?: string[]) => {
     try {
       const activities: RecentActivity[] = []
 
-      // Buscar leads recentes
+      // Buscar leads recentes com tratamento melhor de relações
       let leadsQuery = supabase
         .from('leads')
         .select(`
@@ -543,6 +547,8 @@ export default function DashboardPage() {
           full_name,
           status,
           created_at,
+          converted_at,
+          indicated_by,
           users!leads_indicated_by_fkey (
             full_name
           )
@@ -551,16 +557,19 @@ export default function DashboardPage() {
         .order('created_at', { ascending: false })
         .limit(10)
 
-      if (userIds) {
+      if (userIds && userIds.length > 0) {
         leadsQuery = leadsQuery.in('indicated_by', userIds)
       }
 
-      const { data: recentLeads } = await leadsQuery
+      const { data: recentLeads, error: leadsError } = await leadsQuery
 
+      if (leadsError) {
+        console.warn('⚠️ Erro ao buscar leads recentes:', leadsError)
+      }
+
+      // Processar leads
       recentLeads?.forEach((lead: any) => {
-        // CORREÇÃO: Tratar users como array ou objeto único
-        const userData = Array.isArray(lead.users) ? lead.users[0] : lead.users
-        const userName = userData?.full_name || 'Usuário não identificado'
+        const userName = lead.users?.full_name || 'Usuário não identificado'
 
         if (lead.status === 'converted') {
           activities.push({
@@ -568,7 +577,7 @@ export default function DashboardPage() {
             type: 'lead_converted',
             title: 'Lead Convertido',
             description: `${lead.full_name} foi convertido por ${userName}`,
-            date: lead.created_at,
+            date: lead.converted_at || lead.created_at,
             user: userName
           })
         } else {
@@ -590,6 +599,7 @@ export default function DashboardPage() {
           id,
           amount,
           paid_at,
+          user_id,
           users!commissions_user_id_fkey (
             full_name
           )
@@ -599,22 +609,25 @@ export default function DashboardPage() {
         .order('paid_at', { ascending: false })
         .limit(5)
 
-      if (userIds) {
+      if (userIds && userIds.length > 0) {
         commissionsQuery = commissionsQuery.in('user_id', userIds)
       }
 
-      const { data: paidCommissions } = await commissionsQuery
+      const { data: paidCommissions, error: commissionsError } = await commissionsQuery
 
+      if (commissionsError) {
+        console.warn('⚠️ Erro ao buscar comissões:', commissionsError)
+      }
+
+      // Processar comissões
       paidCommissions?.forEach((commission: any) => {
-        // CORREÇÃO: Tratar users como array ou objeto único
-        const userData = Array.isArray(commission.users) ? commission.users[0] : commission.users
-        const userName = userData?.full_name || 'Usuário não identificado'
+        const userName = commission.users?.full_name || 'Usuário não identificado'
 
         activities.push({
           id: `commission-paid-${commission.id}`,
           type: 'commission_paid',
           title: 'Comissão Paga',
-          description: `R$ ${commission.amount.toFixed(2)} pago para ${userName}`,
+          description: `R$ ${(commission.amount || 0).toFixed(2)} pago para ${userName}`,
           date: commission.paid_at,
           amount: commission.amount,
           user: userName
@@ -625,15 +638,18 @@ export default function DashboardPage() {
       activities.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 
       setRecentActivity(activities.slice(0, 10))
+      console.log('✅ Atividades recentes carregadas:', activities.length)
+
     } catch (error) {
       console.error('❌ Erro ao buscar atividades recentes:', error)
     }
-  }
+  }, [])
 
-  const fetchTopPerformers = async (clinicId: string) => {
+  // CORREÇÃO 7: Função de top performers melhorada
+  const fetchTopPerformers = useCallback(async (clinicId: string) => {
     try {
-      // Para simplificar, vamos focar nos consultores
-      const { data: consultants } = await supabase
+      // Buscar consultores ativos
+      const { data: consultants, error: consultantsError } = await supabase
         .from('users')
         .select(`
           id,
@@ -644,56 +660,88 @@ export default function DashboardPage() {
         .eq('role', 'consultant')
         .eq('status', 'active')
 
+      if (consultantsError) {
+        console.warn('⚠️ Erro ao buscar consultores:', consultantsError)
+        return
+      }
+
+      if (!consultants || consultants.length === 0) {
+        setTopPerformers([])
+        return
+      }
+
       const performers = await Promise.all(
-        (consultants || []).map(async (consultant: any) => {
-          // Buscar leads do consultor
-          const { data: leads } = await supabase
-            .from('leads')
-            .select('id, status, arcadas_vendidas')
-            .eq('indicated_by', consultant.id)
+        consultants.map(async (consultant: any) => {
+          try {
+            // Buscar leads do consultor
+            const { data: leads } = await supabase
+              .from('leads')
+              .select('id, status, arcadas_vendidas')
+              .eq('indicated_by', consultant.id)
 
-          // Buscar comissões do consultor
-          const { data: commissions } = await supabase
-            .from('commissions')
-            .select('amount, status')
-            .eq('user_id', consultant.id)
+            // Buscar comissões pagas do consultor
+            const { data: commissions } = await supabase
+              .from('commissions')
+              .select('amount, status')
+              .eq('user_id', consultant.id)
+              .eq('status', 'paid')
 
-          // Buscar estabelecimento do consultor
-          const { data: establishment } = await supabase
-            .from('user_establishments')
-            .select(`
-              establishment_codes!user_establishments_establishment_code_fkey (
-                name
-              )
-            `)
-            .eq('user_id', consultant.id)
-            .eq('status', 'active')
-            .limit(1)
-            .single()
+            // Buscar estabelecimento do consultor
+            const { data: establishment } = await supabase
+              .from('user_establishments')
+              .select(`
+                establishment_code,
+                establishment_codes!user_establishments_establishment_code_fkey (
+                  name
+                )
+              `)
+              .eq('user_id', consultant.id)
+              .eq('status', 'active')
+              .limit(1)
+              .single()
 
-          const totalLeads = leads?.length || 0
-          const conversions = leads?.filter(l => l.status === 'converted').length || 0
-          const totalCommissions = commissions?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-          const conversionRate = totalLeads > 0 ? (conversions / totalLeads) * 100 : 0
+            const totalLeads = leads?.length || 0
+            const conversions = leads?.filter(l => l.status === 'converted').length || 0
+            const totalCommissions = commissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+            const conversionRate = totalLeads > 0 ? (conversions / totalLeads) * 100 : 0
 
-          // CORREÇÃO: Tratar establishment_codes como array ou objeto único
-          const establishmentData = Array.isArray(establishment?.establishment_codes)
-            ? establishment.establishment_codes[0]
-            : establishment?.establishment_codes
-          const establishmentName = establishmentData?.name || 'N/A'
+            // Tratar nome do estabelecimento
+            let establishmentName = 'N/A'
+            if (establishment?.establishment_codes) {
+              const estData = Array.isArray(establishment.establishment_codes)
+                ? establishment.establishment_codes[0]
+                : establishment.establishment_codes
+              establishmentName = estData?.name || 'N/A'
+            }
 
-          return {
-            id: consultant.id,
-            name: consultant.full_name,
-            role: 'consultant' as const,
-            establishment: establishmentName,
-            metrics: {
-              leads: totalLeads,
-              conversions,
-              commissions: totalCommissions,
-              conversionRate
-            },
-            avatar: consultant.full_name.charAt(0).toUpperCase()
+            return {
+              id: consultant.id,
+              name: consultant.full_name,
+              role: 'consultant' as const,
+              establishment: establishmentName,
+              metrics: {
+                leads: totalLeads,
+                conversions,
+                commissions: totalCommissions,
+                conversionRate
+              },
+              avatar: consultant.full_name.charAt(0).toUpperCase()
+            }
+          } catch (error) {
+            console.warn(`⚠️ Erro ao processar consultor ${consultant.id}:`, error)
+            return {
+              id: consultant.id,
+              name: consultant.full_name,
+              role: 'consultant' as const,
+              establishment: 'N/A',
+              metrics: {
+                leads: 0,
+                conversions: 0,
+                commissions: 0,
+                conversionRate: 0
+              },
+              avatar: consultant.full_name.charAt(0).toUpperCase()
+            }
           }
         })
       )
@@ -702,10 +750,12 @@ export default function DashboardPage() {
       performers.sort((a, b) => b.metrics.commissions - a.metrics.commissions)
 
       setTopPerformers(performers.slice(0, 5))
+      console.log('✅ Top performers carregados:', performers.length)
+
     } catch (error) {
       console.error('❌ Erro ao buscar top performers:', error)
     }
-  }
+  }, [])
 
   const getGreeting = () => {
     const hour = new Date().getHours()
@@ -724,7 +774,7 @@ export default function DashboardPage() {
         ]
       case 'manager':
         return [
-          { label: 'Minha Equipe', href: '/dashboard/team', icon: UserGroupIcon },
+          { label: 'Minha Equipe', href: '/dashboard/consultants', icon: UserGroupIcon },
           { label: 'Leads da Equipe', href: '/dashboard/leads', icon: UsersIcon },
           { label: 'Comissões', href: '/dashboard/commissions', icon: CurrencyDollarIcon },
         ]
@@ -738,10 +788,41 @@ export default function DashboardPage() {
     }
   }
 
+  // CORREÇÃO 8: Loading e Error States melhorados
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="loading-spinner w-8 h-8"></div>
+        <div className="text-center">
+          <div className="loading-spinner w-8 h-8 mx-auto mb-4"></div>
+          <p className="text-secondary-600">Carregando dashboard...</p>
+          {profile?.role && (
+            <p className="text-xs text-secondary-500 mt-2">
+              Modo: {profile.role}
+            </p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-danger-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <ChartBarIcon className="w-8 h-8 text-danger-600" />
+          </div>
+          <h3 className="text-lg font-medium text-secondary-900 mb-2">
+            Erro ao carregar dashboard
+          </h3>
+          <p className="text-secondary-600 mb-4">{error}</p>
+          <button
+            onClick={fetchDashboardData}
+            className="btn btn-primary"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     )
   }
@@ -756,6 +837,16 @@ export default function DashboardPage() {
         <p className="text-secondary-600">
           Aqui está um resumo das suas atividades e performance.
         </p>
+        {/* Debug info em desenvolvimento */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="mt-2 text-xs text-secondary-500">
+            Role: {profile?.role} | Stats: {JSON.stringify({
+              leads: stats.totalLeads,
+              conversions: stats.convertedLeads,
+              revenue: stats.totalRevenue
+            })}
+          </div>
+        )}
       </div>
 
       {/* Stats Grid */}
@@ -771,6 +862,38 @@ export default function DashboardPage() {
               <div className="flex-shrink-0">
                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                   <UsersIcon className="w-5 h-5 text-primary-600" />
+                </div>
+              </div>
+              <div className="ml-4 flex-1">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-secondary-500">Total Leads</p>
+                  <span className="text-xs text-secondary-400">
+                    {stats.thisMonthLeads} este mês
+                  </span>
+                </div>
+                <p className="text-2xl font-bold text-secondary-900">{stats.totalLeads}</p>
+                <div className="flex items-center mt-1">
+                  <span className="text-sm text-primary-600 font-medium">
+                    {stats.convertedLeads} convertidos
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Conversões */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <CheckCircleIcon className="w-5 h-5 text-success-600" />
                 </div>
               </div>
               <div className="ml-4 flex-1">
@@ -817,7 +940,7 @@ export default function DashboardPage() {
                   R$ {stats.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                 </p>
                 <div className="text-xs text-secondary-500">
-                  Baseado nas configurações por estabelecimento
+                  Baseado nas arcadas vendidas
                 </div>
               </div>
             </div>
@@ -840,7 +963,7 @@ export default function DashboardPage() {
               </div>
               <div className="ml-4 flex-1">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-secondary-500">Comissões</p>
+                  <p className="text-sm font-medium text-secondary-500">Comissões Pagas</p>
                   <span className="text-xs text-secondary-400">
                     R$ {stats.pendingCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} pendente
                   </span>
@@ -1099,12 +1222,22 @@ export default function DashboardPage() {
             <h3 className="text-lg font-medium text-blue-900">Debug Info</h3>
           </div>
           <div className="card-body">
-            <div className="text-xs text-blue-700">
+            <div className="text-xs text-blue-700 space-y-2">
               <div><strong>User Role:</strong> {profile?.role}</div>
               <div><strong>User ID:</strong> {profile?.id}</div>
-              <div><strong>Establishment Count:</strong> {stats.establishmentCount}</div>
-              <div><strong>Total Revenue Calculation:</strong> Based on establishment-specific commission settings</div>
-              <div><strong>Stats:</strong> {JSON.stringify(stats, null, 2)}</div>
+              <div><strong>Loading:</strong> {loading.toString()}</div>
+              <div><strong>Error:</strong> {error || 'None'}</div>
+              <div><strong>Recent Activities:</strong> {recentActivity.length}</div>
+              <div><strong>Top Performers:</strong> {topPerformers.length}</div>
+              <div className="mt-2">
+                <strong>Stats Summary:</strong>
+                <div className="ml-2">
+                  <div>Total Leads: {stats.totalLeads}</div>
+                  <div>Converted: {stats.convertedLeads}</div>
+                  <div>Revenue: R$ {stats.totalRevenue.toLocaleString('pt-BR')}</div>
+                  <div>Commissions: R$ {stats.totalCommissions.toLocaleString('pt-BR')}</div>
+                </div>
+              </div>
             </div>
           </div>
         </motion.div>
