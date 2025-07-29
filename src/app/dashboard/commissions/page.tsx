@@ -32,8 +32,12 @@ interface Commission {
   status: 'pending' | 'paid' | 'cancelled'
   paid_at: string | null
   created_at: string
+  is_indication_commission: boolean
   lead_id: string
   user_id: string
+  establishment?: {
+    name: string
+  }
   leads?: {
     id: string
     full_name: string
@@ -41,10 +45,12 @@ interface Commission {
     status: string
     created_at: string
     arcadas_vendidas: number
+    converted_at?: string
   }
   users?: {
     full_name: string
     email: string
+    role: string
   }
 }
 
@@ -86,6 +92,8 @@ export default function CommissionsPage() {
     }
   }, [profile])
 
+  // src/app/dashboard/commissions/page.tsx - CORREÇÃO DA FUNÇÃO fetchCommissions
+
   const fetchCommissions = async () => {
     try {
       setLoading(true)
@@ -101,24 +109,28 @@ export default function CommissionsPage() {
 
       if (!userClinic) return
 
+      // CORREÇÃO: Query melhorada para buscar comissões com relações corretas
       let query = supabase
         .from('commissions')
         .select(`
         *,
-        lead:leads!commissions_lead_id_fkey (
+        leads!left (
           id,
           full_name,
           phone,
           status,
-          establishment_code
+          arcadas_vendidas,
+          establishment_code,
+          created_at,
+          converted_at
         ),
-        user:users!commissions_user_id_fkey (
+        users!left (
           id,
           full_name,
           email,
           role
         ),
-        establishment:establishment_codes!commissions_establishment_code_fkey (
+        establishment_codes!left (
           code,
           name
         )
@@ -126,20 +138,19 @@ export default function CommissionsPage() {
         .eq('clinic_id', userClinic.clinic_id)
         .order('created_at', { ascending: false })
 
-      // ✅ CORREÇÃO: Filtros por role corrigidos
+      // ✅ CORREÇÃO: Filtros por role corrigidos e melhorados
       if (profile.role === 'consultant') {
+        // Consultor vê apenas suas próprias comissões
         query = query.eq('user_id', profile.id)
       } else if (profile.role === 'manager') {
-        // Buscar consultores da equipe DO GERENTE
+        // Gerente vê comissões de sua equipe + suas próprias
         const { data: hierarchy } = await supabase
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
 
         const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-
-        // ✅ CORREÇÃO: Incluir o próprio gerente E os consultores da equipe
-        consultantIds.push(profile.id)
+        consultantIds.push(profile.id) // Incluir o próprio gerente
 
         if (consultantIds.length > 0) {
           query = query.in('user_id', consultantIds)
@@ -152,38 +163,81 @@ export default function CommissionsPage() {
 
       const { data, error } = await query
 
-      if (error) throw error
-      setCommissions(data || [])
+      if (error) {
+        console.error('❌ Erro na query de comissões:', error)
+        throw error
+      }
 
-      // ✅ CORREÇÃO: Calcular estatísticas compatíveis com a interface CommissionStats
-      const totalCommissions = data?.reduce((sum, c) => sum + c.amount, 0) || 0
-      const paidCommissions = data?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.amount, 0) || 0
-      const pendingCommissions = data?.filter(c => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0) || 0
-      const cancelledCommissions = data?.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + c.amount, 0) || 0
+      console.log('✅ Comissões carregadas:', data?.length || 0)
+
+      // CORREÇÃO: Processar dados para garantir que todas as relações estão corretas
+      const processedCommissions = (data || []).map(commission => {
+        return {
+          ...commission,
+          // Garantir que temos os dados do lead
+          leads: commission.leads ? {
+            id: commission.leads.id,
+            full_name: commission.leads.full_name || 'Nome não disponível',
+            phone: commission.leads.phone || 'Telefone não informado',
+            status: commission.leads.status || 'unknown',
+            arcadas_vendidas: commission.leads.arcadas_vendidas || 1,
+            establishment_code: commission.leads.establishment_code,
+            created_at: commission.leads.created_at,
+            converted_at: commission.leads.converted_at
+          } : null,
+          // Garantir que temos os dados do usuário
+          users: commission.users ? {
+            id: commission.users.id,
+            full_name: commission.users.full_name || 'Usuário não identificado',
+            email: commission.users.email || 'Email não disponível',
+            role: commission.users.role || 'consultant'
+          } : null,
+          // Garantir dados do estabelecimento
+          establishment: commission.establishment_codes ? {
+            code: commission.establishment_codes.code,
+            name: commission.establishment_codes.name || commission.establishment_codes.code
+          } : null
+        }
+      })
+
+      setCommissions(processedCommissions)
+
+      // ✅ CORREÇÃO: Calcular estatísticas com dados processados
+      const totalCommissions = processedCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+      const paidCommissions = processedCommissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.amount || 0), 0)
+      const pendingCommissions = processedCommissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.amount || 0), 0)
+      const cancelledCommissions = processedCommissions.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + (c.amount || 0), 0)
 
       // Calcular comissões deste mês
       const thisMonth = new Date()
       const firstDayOfMonth = new Date(thisMonth.getFullYear(), thisMonth.getMonth(), 1)
-      const monthlyCommissions = data?.filter(c =>
+      const monthlyCommissions = processedCommissions.filter(c =>
         new Date(c.created_at) >= firstDayOfMonth && c.status === 'paid'
-      ).reduce((sum, c) => sum + c.amount, 0) || 0
+      ).reduce((sum, c) => sum + (c.amount || 0), 0)
 
       // Calcular total de arcadas
-      const totalArcadas = data?.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0) || 0
+      const totalArcadas = processedCommissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)
 
-      // Calcular taxa de conversão (leads convertidos / total de leads)
-      const totalLeads = data?.filter(c => c.lead).length || 0
-      const convertedLeads = data?.filter(c => c.lead?.status === 'converted').length || 0
-      const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
+      // Calcular taxa de conversão baseada nos leads vinculados
+      const leadsComComissao = processedCommissions.filter(c => c.leads).length
+      const leadsConvertidos = processedCommissions.filter(c => c.leads?.status === 'converted').length
+      const conversionRate = leadsComComissao > 0 ? (leadsConvertidos / leadsComComissao) * 100 : 0
 
       setStats({
-        total: data?.length || 0,
+        total: processedCommissions.length,
         totalPending: pendingCommissions,
         totalPaid: paidCommissions,
         totalCancelled: cancelledCommissions,
-        averageCommission: data?.length > 0 ? totalCommissions / data.length : 0,
+        averageCommission: processedCommissions.length > 0 ? totalCommissions / processedCommissions.length : 0,
         monthlyEarnings: monthlyCommissions,
         conversionRate: conversionRate,
+        totalArcadas: totalArcadas
+      })
+
+      console.log('✅ Stats calculadas:', {
+        total: processedCommissions.length,
+        totalPaid: paidCommissions,
+        totalPending: pendingCommissions,
         totalArcadas: totalArcadas
       })
 
@@ -193,6 +247,29 @@ export default function CommissionsPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const getLeadStatusLabel = (status: string) => {
+    const statusMap = {
+      'new': 'Novo',
+      'contacted': 'Contatado',
+      'scheduled': 'Agendado',
+      'converted': 'Convertido',
+      'lost': 'Perdido'
+    }
+    return statusMap[status as keyof typeof statusMap] || status
+  }
+
+  // Função helper para obter a cor do status do lead
+  const getLeadStatusColor = (status: string) => {
+    const colorMap = {
+      'new': 'bg-blue-100 text-blue-800',
+      'contacted': 'bg-yellow-100 text-yellow-800',
+      'scheduled': 'bg-purple-100 text-purple-800',
+      'converted': 'bg-green-100 text-green-800',
+      'lost': 'bg-red-100 text-red-800'
+    }
+    return colorMap[status as keyof typeof colorMap] || 'bg-gray-100 text-gray-800'
   }
 
   const handlePayCommission = async (commissionId: string) => {
@@ -587,57 +664,116 @@ export default function CommissionsPage() {
               <tbody>
                 {filteredCommissions.map((commission) => (
                   <tr key={commission.id}>
+                    {/* CORREÇÃO: Coluna Lead com informações mais detalhadas */}
                     <td>
                       <div>
                         <div className="font-medium text-secondary-900">
-                          {commission.leads?.full_name}
+                          {commission.leads?.full_name || 'Lead não identificado'}
                         </div>
                         <div className="text-sm text-secondary-500">
-                          {commission.leads?.phone}
+                          {commission.leads?.phone || 'Telefone não informado'}
                         </div>
-                        <div className="text-xs text-secondary-400">
-                          Lead: {commission.leads?.status === 'converted' ? 'Convertido' :
-                            commission.leads?.status === 'lost' ? 'Perdido' :
-                              commission.leads?.status === 'contacted' ? 'Contatado' :
-                                commission.leads?.status === 'scheduled' ? 'Agendado' : 'Novo'}
+                        {/* CORREÇÃO: Status do lead mais informativo */}
+                        {commission.leads?.status && (
+                          <div className="mt-1">
+                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getLeadStatusColor(commission.leads.status)}`}>
+                              {getLeadStatusLabel(commission.leads.status)}
+                            </span>
+                          </div>
+                        )}
+                        {/* CORREÇÃO: Mostrar data de criação/conversão */}
+                        <div className="text-xs text-secondary-400 mt-1">
+                          {commission.leads?.status === 'converted' && commission.leads?.converted_at
+                            ? `Convertido em ${new Date(commission.leads.converted_at).toLocaleDateString('pt-BR')}`
+                            : commission.leads?.created_at
+                              ? `Criado em ${new Date(commission.leads.created_at).toLocaleDateString('pt-BR')}`
+                              : 'Data não disponível'
+                          }
                         </div>
                       </div>
                     </td>
+
+                    {/* CORREÇÃO: Coluna Consultor (apenas se não for consultor logado) */}
                     {profile?.role !== 'consultant' && (
                       <td>
-                        <div className="text-sm text-secondary-900">
-                          {commission.users?.full_name}
-                        </div>
-                        <div className="text-xs text-secondary-500">
-                          {commission.users?.email}
+                        <div>
+                          <div className="text-sm text-secondary-900">
+                            {commission.users?.full_name || 'Consultor não identificado'}
+                          </div>
+                          <div className="text-xs text-secondary-500">
+                            {commission.users?.email || 'Email não disponível'}
+                          </div>
+                          {/* CORREÇÃO: Mostrar role do usuário */}
+                          <div className="text-xs text-primary-600 mt-1">
+                            {commission.users?.role === 'manager' ? '👑 Gerente' :
+                              commission.users?.role === 'consultant' ? '👤 Consultor' :
+                                '❓ Função não definida'}
+                          </div>
                         </div>
                       </td>
                     )}
+
+                    {/* CORREÇÃO: Coluna Arcadas com informações mais claras */}
                     <td>
                       <div className="text-center">
                         <div className="text-lg font-bold text-primary-600">
-                          {commission.leads?.arcadas_vendidas || 1}
+                          {commission.leads?.arcadas_vendidas || commission.arcadas_vendidas || 1}
                         </div>
                         <div className="text-xs text-secondary-500">
-                          {(commission.leads?.arcadas_vendidas || 1) === 1 ? 'Superior OU Inferior' : 'Superior E Inferior'}
+                          {(commission.leads?.arcadas_vendidas || commission.arcadas_vendidas || 1) === 1 ? 'Superior OU Inferior' : 'Superior E Inferior'}
                         </div>
+                        {/* CORREÇÃO: Mostrar estabelecimento se disponível */}
+                        {commission.establishment?.name && (
+                          <div className="text-xs text-blue-600 mt-1">
+                            📍 {commission.establishment.name}
+                          </div>
+                        )}
                       </div>
                     </td>
+
+                    {/* CORREÇÃO: Coluna Valor Total com breakdown */}
                     <td>
                       <div>
                         <div className="text-lg font-bold text-success-600">
-                          R$ {commission.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          R$ {(commission.amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </div>
-                        <div className="text-xs text-secondary-500">
-                          {commission.type === 'consultant' ? 'Valor para consultor' : 'Valor para manager'}
+                        {/* CORREÇÃO: Mostrar breakdown do valor */}
+                        <div className="text-xs text-secondary-500 space-y-1">
+                          {commission.valor_por_arcada && (
+                            <div>Base: R$ {commission.valor_por_arcada.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/arcada</div>
+                          )}
+                          {commission.valor_bonus && commission.valor_bonus > 0 && (
+                            <div className="text-warning-600">
+                              Bônus: R$ {commission.valor_bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              {commission.bonus_conquistados && ` (${commission.bonus_conquistados}x)`}
+                            </div>
+                          )}
                         </div>
+                        {/* CORREÇÃO: Indicar se é comissão de indicação */}
+                        {commission.is_indication_commission && (
+                          <div className="text-xs text-purple-600 font-medium mt-1">
+                            🔗 Comissão de Indicação
+                          </div>
+                        )}
                       </div>
                     </td>
+
+                    {/* CORREÇÃO: Coluna Tipo mais clara */}
                     <td>
-                      <span className={`badge badge-${getTypeColor(commission.type)}`}>
-                        {commission.type === 'consultant' ? 'Consultor' : 'Manager'}
-                      </span>
+                      <div className="text-center">
+                        <span className={`badge ${getTypeColor(commission.type)}`}>
+                          {commission.type === 'consultant' ? '👤 Consultor' : '👑 Manager'}
+                        </span>
+                        {/* CORREÇÃO: Mostrar percentual se for indicação */}
+                        {commission.is_indication_commission && commission.percentage && commission.percentage !== 100 && (
+                          <div className="text-xs text-purple-600 mt-1">
+                            {commission.percentage}% da comissão
+                          </div>
+                        )}
+                      </div>
                     </td>
+
+                    {/* Coluna Status (mantida igual) */}
                     <td>
                       <span className={`badge badge-${getStatusColor(commission.status)} flex items-center`}>
                         {getStatusIcon(commission.status)}
@@ -647,16 +783,26 @@ export default function CommissionsPage() {
                         </span>
                       </span>
                     </td>
+
+                    {/* CORREÇÃO: Coluna Data com mais informações */}
                     <td>
                       <div className="text-sm text-secondary-900">
                         {new Date(commission.created_at).toLocaleDateString('pt-BR')}
                       </div>
+                      <div className="text-xs text-secondary-500">
+                        {new Date(commission.created_at).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </div>
                       {commission.paid_at && (
-                        <div className="text-xs text-success-600">
-                          Pago em {new Date(commission.paid_at).toLocaleDateString('pt-BR')}
+                        <div className="text-xs text-success-600 mt-1">
+                          💰 Pago em {new Date(commission.paid_at).toLocaleDateString('pt-BR')}
                         </div>
                       )}
                     </td>
+
+                    {/* Coluna Ações (mantida igual) */}
                     {canManageCommissions && (
                       <td>
                         <div className="flex items-center space-x-2">

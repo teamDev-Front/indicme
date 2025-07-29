@@ -381,6 +381,8 @@ export default function TeamPage() {
         }
     }
 
+    // src/app/dashboard/team/page.tsx - CORREÇÃO DA FUNÇÃO handleCreateNewConsultant
+
     const handleCreateNewConsultant = async () => {
         if (!profile) {
             toast.error('Usuário não autenticado')
@@ -395,15 +397,153 @@ export default function TeamPage() {
         try {
             setSubmitting(true)
 
-            // 1. Buscar clínica do gerente
-            const { data: userClinic, error: clinicError } = await supabase
-                .from('user_clinics')
-                .select('clinic_id')
-                .eq('user_id', profile.id)
-                .single()
+            // 1. CORREÇÃO: Buscar clínica de forma mais robusta
+            console.log('🔍 Buscando clínica do gerente:', profile.id)
 
-            if (clinicError || !userClinic) {
-                throw new Error('Clínica não encontrada.')
+            let clinicId: string | null = null
+
+            // Estratégia 1: Buscar via user_clinics
+            const { data: userClinic, error: userClinicError } = await supabase
+                .from('user_clinics')
+                .select('clinic_id, clinics!inner(id, name, status)')
+                .eq('user_id', profile.id)
+                .eq('clinics.status', 'active')
+                .maybeSingle()
+
+            if (userClinic?.clinic_id) {
+                clinicId = userClinic.clinic_id
+                console.log('✅ Clínica encontrada via user_clinics:', clinicId)
+            } else {
+                console.log('⚠️ Não encontrou via user_clinics, buscando outras estratégias...')
+
+                // Estratégia 2: Buscar via estabelecimento do gerente
+                const { data: establishmentData } = await supabase
+                    .from('establishment_codes')
+                    .select('code')
+                    .eq('name', managerEstablishments[0])
+                    .single()
+
+                if (establishmentData?.code) {
+                    console.log('📍 Buscando outros usuários do estabelecimento:', establishmentData.code)
+
+                    // Buscar usuários do mesmo estabelecimento (consulta simples)
+                    const { data: sameEstablishmentUsers } = await supabase
+                        .from('user_establishments')
+                        .select('user_id')
+                        .eq('establishment_code', establishmentData.code)
+                        .eq('status', 'active')
+                        .limit(10)
+
+                    if (sameEstablishmentUsers && sameEstablishmentUsers.length > 0) {
+                        console.log(`👥 Encontrados ${sameEstablishmentUsers.length} usuários no estabelecimento`)
+
+                        // Para cada usuário, tentar encontrar sua clínica
+                        for (const userEst of sameEstablishmentUsers) {
+                            try {
+                                const { data: userClinicData } = await supabase
+                                    .from('user_clinics')
+                                    .select('clinic_id')
+                                    .eq('user_id', userEst.user_id)
+                                    .single()
+
+                                if (userClinicData?.clinic_id) {
+                                    // Verificar se a clínica está ativa
+                                    const { data: clinicData } = await supabase
+                                        .from('clinics')
+                                        .select('id, status')
+                                        .eq('id', userClinicData.clinic_id)
+                                        .eq('status', 'active')
+                                        .single()
+
+                                    if (clinicData) {
+                                        clinicId = userClinicData.clinic_id
+                                        console.log('✅ Clínica encontrada via estabelecimento:', clinicId)
+
+                                        // Associar o gerente à clínica automaticamente
+                                        const { error: autoAssocError } = await supabase
+                                            .from('user_clinics')
+                                            .upsert({
+                                                user_id: profile.id,
+                                                clinic_id: clinicId
+                                            }, {
+                                                onConflict: 'user_id,clinic_id',
+                                                ignoreDuplicates: true
+                                            })
+
+                                        if (autoAssocError) {
+                                            console.warn('Aviso ao associar gerente à clínica:', autoAssocError)
+                                        } else {
+                                            console.log('✅ Gerente associado automaticamente à clínica')
+                                        }
+                                        break // Parar no primeiro sucesso
+                                    }
+                                }
+                            } catch (error) {
+                                // Continue para o próximo usuário se este der erro
+                                console.log(`⚠️ Erro ao verificar usuário ${userEst.user_id}:`, error)
+                                continue
+                            }
+                        }
+                    }
+                }
+
+                // Estratégia 3: Se ainda não encontrou, buscar primeira clínica ativa
+                if (!clinicId) {
+                    console.log('⚠️ Tentando encontrar primeira clínica ativa...')
+
+                    const { data: availableClinics, error: clinicsError } = await supabase
+                        .from('clinics')
+                        .select('id, name')
+                        .eq('status', 'active')
+                        .limit(1)
+
+                    if (availableClinics && availableClinics.length > 0) {
+                        clinicId = availableClinics[0].id
+                        console.log('✅ Usando primeira clínica ativa:', clinicId)
+
+                        // Associar o gerente a esta clínica
+                        await supabase
+                            .from('user_clinics')
+                            .upsert({
+                                user_id: profile.id,
+                                clinic_id: clinicId
+                            })
+                    }
+                }
+
+                // Estratégia 4: Último recurso - criar clínica padrão
+                if (!clinicId) {
+                    console.log('⚠️ Criando clínica padrão...')
+
+                    const { data: newClinic, error: createClinicError } = await supabase
+                        .from('clinics')
+                        .insert({
+                            name: 'Clínica Principal',
+                            status: 'active'
+                        })
+                        .select('id')
+                        .single()
+
+                    if (createClinicError) {
+                        throw new Error('Não foi possível criar clínica padrão')
+                    }
+
+                    clinicId = newClinic.id
+
+                    // Associar o gerente à nova clínica
+                    await supabase
+                        .from('user_clinics')
+                        .insert({
+                            user_id: profile.id,
+                            clinic_id: clinicId
+                        })
+
+                    console.log('✅ Clínica padrão criada:', clinicId)
+                }
+            }
+
+            if (!clinicId) {
+                throw new Error('Não foi possível determinar ou criar uma clínica para este gerente')
             }
 
             // 2. Buscar código do estabelecimento do gerente
@@ -418,6 +558,7 @@ export default function TeamPage() {
             }
 
             // 3. Criar usuário no auth
+            console.log('👤 Criando usuário no auth...')
             const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
                 email: newConsultantForm.email,
                 password: newConsultantForm.password,
@@ -433,11 +574,13 @@ export default function TeamPage() {
             }
 
             const newUserId = signUpData.user.id
+            console.log('✅ Usuário criado no auth:', newUserId)
 
             // 4. Aguardar propagação
             await new Promise(resolve => setTimeout(resolve, 2000))
 
-            // 5. Criar perfil (SEM ON CONFLICT)
+            // 5. Criar perfil
+            console.log('📝 Criando perfil...')
             const { error: profileError } = await supabase
                 .from('users')
                 .insert({
@@ -450,7 +593,6 @@ export default function TeamPage() {
                 })
 
             if (profileError) {
-                // Se der erro de duplicata, tentar update
                 if (profileError.code === '23505') {
                     const { error: updateError } = await supabase
                         .from('users')
@@ -470,38 +612,36 @@ export default function TeamPage() {
                 }
             }
 
-            // 6. Associar à clínica (SEM ON CONFLICT)
+            // 6. Associar à clínica
+            console.log('🏥 Associando à clínica...')
             const { error: clinicAssocError } = await supabase
                 .from('user_clinics')
                 .insert({
                     user_id: newUserId,
-                    clinic_id: userClinic.clinic_id,
+                    clinic_id: clinicId,
                 })
 
-            if (clinicAssocError) {
-                // Se der erro de duplicata, ignorar (já está associado)
-                if (clinicAssocError.code !== '23505') {
-                    throw clinicAssocError
-                }
+            if (clinicAssocError && clinicAssocError.code !== '23505') {
+                throw clinicAssocError
             }
 
-            // 7. Criar hierarquia (SEM ON CONFLICT)
+            // 7. Criar hierarquia
+            console.log('👥 Criando hierarquia...')
             const { error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .insert({
                     manager_id: profile.id,
                     consultant_id: newUserId,
-                    clinic_id: userClinic.clinic_id,
+                    clinic_id: clinicId,
                 })
 
-            if (hierarchyError) {
-                // Se der erro de duplicata, ignorar (já está na hierarquia)
-                if (hierarchyError.code !== '23505') {
-                    throw hierarchyError
-                }
+            if (hierarchyError && hierarchyError.code !== '23505') {
+                console.warn('Erro ao criar hierarquia:', hierarchyError)
+                toast.error('Consultor criado, mas não foi vinculado à sua equipe')
             }
 
-            // 8. Vincular ao estabelecimento do gerente
+            // 8. Vincular ao estabelecimento
+            console.log('🏢 Vinculando ao estabelecimento...')
             const { error: establishmentError } = await supabase
                 .from('user_establishments')
                 .insert({
@@ -530,7 +670,7 @@ export default function TeamPage() {
             await fetchTeamData()
 
         } catch (error: any) {
-            console.error('Erro ao criar consultor:', error)
+            console.error('❌ Erro ao criar consultor:', error)
             if (error.message.includes('already registered')) {
                 toast.error('Este email já está cadastrado no sistema.')
             } else {
