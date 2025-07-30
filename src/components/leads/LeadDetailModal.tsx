@@ -374,7 +374,7 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                       <h4 className="text-lg font-medium text-secondary-900 mb-4">Observações</h4>
                       {isEditing ? (
                         <div className="space-y-4">
-                          <div>
+                          {/* <div>
                             <label className="block text-sm font-medium text-secondary-700 mb-2">
                               Status
                             </label>
@@ -389,7 +389,7 @@ export default function LeadDetailModal({ isOpen, onClose, leadId, onLeadUpdate 
                               <option value="converted">Convertido</option>
                               <option value="lost">Perdido</option>
                             </select>
-                          </div>
+                          </div> */}
                           <div>
                             <label className="block text-sm font-medium text-secondary-700 mb-2">
                               Observações
