@@ -288,7 +288,7 @@ const handleConfirmConversion = async (arcadas: number) => {
           }
 
           console.log('✅ COMISSÃO CORRIGIDA COM SUCESSO!')
-          toast.success(`Comissão corrigida! Valor atualizado para R$ ${expectedAmount.toLocaleString('pt-BR')}`)
+          toast.success('Lead convertido e comissão computada!')
           
         } else {
           console.log('✅ COMISSÃO JÁ ESTÁ CORRETA')
