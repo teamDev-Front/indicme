@@ -133,7 +133,7 @@ export default function DashboardLayout({
             transition={{ duration: 0.3 }}
             className="py-6"
           >
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
               {children}
             </div>
           </motion.div>
