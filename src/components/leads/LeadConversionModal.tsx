@@ -90,9 +90,9 @@ export default function LeadConversionModal({
         }
     }
 
-  
+
     // E também corrija a função fetchConsultorStats:
-      const fetchConsultorStats = async () => {
+    const fetchConsultorStats = async () => {
         if (!lead) return
 
         try {
@@ -116,61 +116,103 @@ export default function LeadConversionModal({
             console.error('Erro ao buscar stats do consultor:', error)
         }
     }
-    
 
+
+    // src/components/leads/LeadConversionModal.tsx - Função handleConvert CORRIGIDA
     const handleConvert = async () => {
         if (!lead) return
 
         try {
             setConverting(true)
 
-            // Valores fixos do sistema de arcadas (você pode buscar da configuração se quiser)
-            const VALOR_POR_ARCADA = 750
-            const BONUS_A_CADA_ARCADAS = 7
-            const VALOR_BONUS = 750
+            // 1. Buscar establishment_code do consultor
+            const { data: userEstablishment } = await supabase
+                .from('user_establishments')
+                .select('establishment_code')
+                .eq('user_id', lead.indicated_by)
+                .eq('status', 'active')
+                .single()
 
-            // 1. Atualizar o lead para convertido
+            const establishmentCode = userEstablishment?.establishment_code
+
+            // 2. Atualizar o lead para convertido
             const { error: leadError } = await supabase
                 .from('leads')
                 .update({
                     status: 'converted',
                     arcadas_vendidas: arcadasSelecionadas,
+                    establishment_code: establishmentCode,
+                    converted_at: new Date().toISOString(),
                     updated_at: new Date().toISOString()
                 })
                 .eq('id', lead.id)
 
             if (leadError) throw leadError
 
-            // 2. Calcular comissão
-            const valorBase = arcadasSelecionadas * VALOR_POR_ARCADA
+            // 3. Buscar configurações específicas do estabelecimento
+            const { data: settings } = await supabase
+                .from('establishment_commissions')
+                .select('*')
+                .eq('establishment_code', establishmentCode)
+                .single()
 
+            const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
+            const managerValuePerArcada = settings?.manager_value_per_arcada || 750
+            const managerBonusActive = settings?.manager_bonus_active !== false
+
+            // 4. Calcular comissão do consultor
+            const valorBase = arcadasSelecionadas * consultantValuePerArcada
+
+            // ✅ OPCIONAL: Calcular bônus do consultor (se implementado)
             // Verificar se com essas arcadas ele ganha bônus
-            const arcadasTotaisAntes = consultorStats.arcadas_atuais
-            const arcadasTotaisDepois = arcadasTotaisAntes + arcadasSelecionadas
+            let valorBonus = 0
+            let novosBonus = 0
 
-            const bonusAntes = Math.floor(arcadasTotaisAntes / BONUS_A_CADA_ARCADAS)
-            const bonusDepois = Math.floor(arcadasTotaisDepois / BONUS_A_CADA_ARCADAS)
+            if (settings?.consultant_bonus_every_arcadas && settings?.consultant_bonus_value) {
+                const bonusACada = settings.consultant_bonus_every_arcadas
+                const valorBonusUnitario = settings.consultant_bonus_value
 
-            const novosBonus = bonusDepois - bonusAntes
-            const valorBonus = novosBonus * VALOR_BONUS
-            const valorTotal = valorBase + valorBonus
+                // Buscar arcadas já vendidas
+                const { data: arcadasAtuaisData } = await supabase
+                    .from('leads')
+                    .select('arcadas_vendidas')
+                    .eq('indicated_by', lead.indicated_by)
+                    .eq('establishment_code', establishmentCode)
+                    .eq('status', 'converted')
 
-            // 3. Criar registro de comissão para o consultor
+                const arcadasTotaisAntes = arcadasAtuaisData?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+                const arcadasTotaisDepois = arcadasTotaisAntes + arcadasSelecionadas
+
+                const bonusAntes = Math.floor(arcadasTotaisAntes / bonusACada)
+                const bonusDepois = Math.floor(arcadasTotaisDepois / bonusACada)
+
+                novosBonus = bonusDepois - bonusAntes
+                valorBonus = novosBonus * valorBonusUnitario
+            }
+
+            const valorTotalConsultor = valorBase + valorBonus
+
+            // 5. Criar registro de comissão para o consultor
             const { error: commissionError } = await supabase
                 .from('commissions')
                 .insert({
                     lead_id: lead.id,
                     user_id: lead.indicated_by,
                     clinic_id: lead.clinic_id,
-                    amount: valorTotal,
-                    percentage: 0, // Campo obrigatório no banco, mas não usamos mais
+                    establishment_code: establishmentCode,
+                    amount: valorTotalConsultor,
+                    percentage: 0,
                     type: 'consultant',
-                    status: 'pending'
+                    status: 'pending',
+                    arcadas_vendidas: arcadasSelecionadas,
+                    valor_por_arcada: consultantValuePerArcada,
+                    bonus_conquistados: novosBonus,
+                    valor_bonus: valorBonus
                 })
 
             if (commissionError) throw commissionError
 
-            // 4. Se o consultor tem um manager, criar comissão para o manager também
+            // 6. ✅ CORRIGIDO: Se o consultor tem um manager, usar sistema correto
             const { data: hierarchy } = await supabase
                 .from('hierarchies')
                 .select('manager_id')
@@ -178,26 +220,79 @@ export default function LeadConversionModal({
                 .single()
 
             if (hierarchy?.manager_id) {
-                // Manager ganha 10% do valor do consultor
-                const managerAmount = valorTotal * 0.1
+                // Comissão base independente do gerente
+                const comissaoBaseGerente = arcadasSelecionadas * managerValuePerArcada
 
-                await supabase
-                    .from('commissions')
-                    .insert({
-                        lead_id: lead.id,
-                        user_id: hierarchy.manager_id,
-                        clinic_id: lead.clinic_id,
-                        amount: managerAmount,
-                        percentage: 0, // Campo obrigatório no banco
-                        type: 'manager',
-                        status: 'pending'
-                    })
+                let bonusGerente = 0
+
+                // Calcular bônus se ativo
+                if (managerBonusActive && settings) {
+                    // Buscar equipe do gerente
+                    const { data: teamHierarchy } = await supabase
+                        .from('hierarchies')
+                        .select('consultant_id')
+                        .eq('manager_id', hierarchy.manager_id)
+
+                    const teamIds = teamHierarchy?.map(h => h.consultant_id) || []
+                    teamIds.push(hierarchy.manager_id)
+
+                    // Buscar total de arcadas da equipe neste estabelecimento
+                    const { data: teamLeads } = await supabase
+                        .from('leads')
+                        .select('arcadas_vendidas')
+                        .in('indicated_by', teamIds)
+                        .eq('establishment_code', establishmentCode)
+                        .eq('status', 'converted')
+
+                    const totalArcadasAntes = teamLeads?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+                    const totalArcadasDepois = totalArcadasAntes + arcadasSelecionadas
+
+                    // Verificar marcos de bônus
+                    const marcos = [
+                        { arcadas: 35, bonus: settings.manager_bonus_35_arcadas || 0 },
+                        { arcadas: 50, bonus: settings.manager_bonus_50_arcadas || 0 },
+                        { arcadas: 75, bonus: settings.manager_bonus_75_arcadas || 0 }
+                    ]
+
+                    for (const marco of marcos) {
+                        const marcosAntes = Math.floor(totalArcadasAntes / marco.arcadas)
+                        const marcosDepois = Math.floor(totalArcadasDepois / marco.arcadas)
+                        const novosMarcos = marcosDepois - marcosAntes
+
+                        if (novosMarcos > 0) {
+                            bonusGerente += novosMarcos * marco.bonus
+                        }
+                    }
+                }
+
+                const managerTotalAmount = comissaoBaseGerente + bonusGerente
+
+                // Criar comissão do gerente
+                if (managerTotalAmount > 0) {
+                    await supabase
+                        .from('commissions')
+                        .insert({
+                            lead_id: lead.id,
+                            user_id: hierarchy.manager_id,
+                            clinic_id: lead.clinic_id,
+                            establishment_code: establishmentCode,
+                            amount: managerTotalAmount,
+                            percentage: 0,
+                            type: 'manager',
+                            status: 'pending',
+                            arcadas_vendidas: arcadasSelecionadas,
+                            valor_por_arcada: managerValuePerArcada,
+                            bonus_conquistados: bonusGerente > 0 ? 1 : 0,
+                            valor_bonus: bonusGerente
+                        })
+                }
             }
 
+            // 7. Mensagens de sucesso
             toast.success(`Lead convertido! ${arcadasSelecionadas} arcada${arcadasSelecionadas > 1 ? 's' : ''} vendida${arcadasSelecionadas > 1 ? 's' : ''}!`)
 
             if (novosBonus > 0) {
-                toast.success(`🎉 Consultor ganhou ${novosBonus} bônus de R$ ${VALOR_BONUS}!`, {
+                toast.success(`🎉 Consultor ganhou ${novosBonus} bônus de R$ ${(valorBonus / novosBonus).toFixed(2)}!`, {
                     duration: 6000
                 })
             }

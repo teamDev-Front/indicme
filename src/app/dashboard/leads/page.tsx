@@ -18,11 +18,13 @@ import {
   EnvelopeIcon,
   MapPinIcon,
   UserIcon,
+  CurrencyDollarIcon,
+  StarIcon,
+  PlayIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import LeadDetailModal from '@/components/leads/LeadDetailModal'
 import ArcadasModal from '@/components/leads/ArcadasModal'
-
 
 interface Lead {
   id: string
@@ -150,14 +152,179 @@ export default function LeadsPage() {
     }
   }
 
+  // 🔥 NOVA FUNÇÃO: Conversão direta com modal de arcadas
+  const handleQuickConvert = (lead: Lead) => {
+    console.log('🎯 Iniciando conversão rápida para lead:', lead.full_name)
+    setSelectedLeadForConversion(lead)
+    setShowArcadasModal(true)
+  }
+
+  // src/app/dashboard/leads/page.tsx - FUNÇÃO CORRIGIDA
+  const handleConfirmConversion = async (arcadas: number) => {
+    if (!selectedLeadForConversion) return
+
+    try {
+      // 1. CRUCIAL: Buscar o establishment_code do consultor
+      const { data: userEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', selectedLeadForConversion.indicated_by)
+        .eq('status', 'active')
+        .single()
+
+      const establishmentCode = userEstablishment?.establishment_code
+
+      // 2. Atualizar o lead COM establishment_code
+      const updateData = {
+        status: 'converted' as const,
+        arcadas_vendidas: arcadas,
+        establishment_code: establishmentCode,
+        converted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('leads')
+        .update(updateData)
+        .eq('id', selectedLeadForConversion.id)
+
+      if (error) throw error
+
+      // 3. Buscar configurações específicas do estabelecimento
+      const { data: settings } = await supabase
+        .from('establishment_commissions')
+        .select('*')
+        .eq('establishment_code', establishmentCode)
+        .single()
+
+      // 4. Configurações com fallback para valores padrão
+      const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
+      const managerValuePerArcada = settings?.manager_value_per_arcada || 750
+      const managerBonusActive = settings?.manager_bonus_active !== false
+
+      // 5. Calcular comissão do consultor
+      const comissaoConsultor = arcadas * consultantValuePerArcada
+
+      // 6. Criar comissão do consultor COM establishment_code
+      await supabase
+        .from('commissions')
+        .insert({
+          lead_id: selectedLeadForConversion.id,
+          user_id: selectedLeadForConversion.indicated_by,
+          clinic_id: selectedLeadForConversion.clinic_id,
+          establishment_code: establishmentCode,
+          amount: comissaoConsultor,
+          percentage: 100,
+          type: 'consultant',
+          status: 'pending',
+          arcadas_vendidas: arcadas,
+          valor_por_arcada: consultantValuePerArcada
+        })
+
+      // 7. ✅ CORRIGIDO: Se houver gerente, usar valor independente + sistema de bônus
+      const { data: hierarchy } = await supabase
+        .from('hierarchies')
+        .select('manager_id')
+        .eq('consultant_id', selectedLeadForConversion.indicated_by)
+        .single()
+
+      if (hierarchy?.manager_id) {
+        // ✅ NOVO: Comissão base independente do gerente
+        const comissaoBaseGerente = arcadas * managerValuePerArcada
+
+        let bonusGerente = 0
+
+        // ✅ NOVO: Calcular bônus apenas se ativo nas configurações
+        if (managerBonusActive && settings) {
+          // Buscar total de arcadas da equipe do gerente neste estabelecimento
+          const { data: teamHierarchy } = await supabase
+            .from('hierarchies')
+            .select('consultant_id')
+            .eq('manager_id', hierarchy.manager_id)
+
+          const teamIds = teamHierarchy?.map(h => h.consultant_id) || []
+          teamIds.push(hierarchy.manager_id) // Incluir o próprio gerente
+
+          // Buscar leads convertidos da equipe neste estabelecimento
+          const { data: teamLeads } = await supabase
+            .from('leads')
+            .select('arcadas_vendidas')
+            .in('indicated_by', teamIds)
+            .eq('establishment_code', establishmentCode)
+            .eq('status', 'converted')
+
+          const totalArcadasEquipeAntes = teamLeads?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+          const totalArcadasEquipeDepois = totalArcadasEquipeAntes + arcadas
+
+          // Verificar marcos de bônus (35, 50, 75 arcadas)
+          const marcos = [
+            { arcadas: 35, bonus: settings.manager_bonus_35_arcadas || 0 },
+            { arcadas: 50, bonus: settings.manager_bonus_50_arcadas || 0 },
+            { arcadas: 75, bonus: settings.manager_bonus_75_arcadas || 0 }
+          ]
+
+          for (const marco of marcos) {
+            const marcosAntes = Math.floor(totalArcadasEquipeAntes / marco.arcadas)
+            const marcosDepois = Math.floor(totalArcadasEquipeDepois / marco.arcadas)
+            const novosMarcos = marcosDepois - marcosAntes
+
+            if (novosMarcos > 0) {
+              bonusGerente += novosMarcos * marco.bonus
+            }
+          }
+        }
+
+        const comissaoTotalGerente = comissaoBaseGerente + bonusGerente
+
+        // ✅ CORRIGIDO: Criar comissão do gerente com valor correto
+        if (comissaoTotalGerente > 0) {
+          await supabase
+            .from('commissions')
+            .insert({
+              lead_id: selectedLeadForConversion.id,
+              user_id: hierarchy.manager_id,
+              clinic_id: selectedLeadForConversion.clinic_id,
+              establishment_code: establishmentCode,
+              amount: comissaoTotalGerente,
+              percentage: 0,
+              type: 'manager',
+              status: 'pending',
+              arcadas_vendidas: arcadas,
+              valor_por_arcada: managerValuePerArcada,
+              bonus_conquistados: bonusGerente > 0 ? 1 : 0,
+              valor_bonus: bonusGerente
+            })
+        }
+      }
+
+      toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
+
+      // Atualizar a lista local
+      setLeads(prev => prev.map(lead =>
+        lead.id === selectedLeadForConversion.id
+          ? { ...lead, ...updateData } as Lead
+          : lead
+      ))
+
+      // Fechar modal
+      setShowArcadasModal(false)
+      setSelectedLeadForConversion(null)
+
+    } catch (error: any) {
+      console.error('Erro ao converter lead:', error)
+      toast.error('Erro ao converter lead')
+    } finally {
+      setUpdatingStatus(null)
+    }
+  }
+
   const updateLeadStatus = async (leadId: string, newStatus: string) => {
     try {
       // Se está marcando como convertido, abrir modal de arcadas
       if (newStatus === 'converted') {
         const lead = leads.find(l => l.id === leadId)
         if (lead) {
-          setSelectedLeadForConversion(lead)
-          setShowArcadasModal(true)
+          handleQuickConvert(lead)
           return // Não atualizar ainda, esperar o modal
         }
       }
@@ -184,107 +351,6 @@ export default function LeadsPage() {
     } catch (error: any) {
       console.error('Erro ao atualizar status:', error)
       toast.error('Erro ao atualizar status')
-    } finally {
-      setUpdatingStatus(null)
-    }
-  }
-
-  // E corrigir o handleConfirmConversion para usar a lógica correta:
-  const handleConfirmConversion = async (arcadas: number) => {
-    if (!selectedLeadForConversion) return
-
-    try {
-      // 1. CRUCIAL: Buscar o establishment_code do consultor
-      const { data: userEstablishment } = await supabase
-        .from('user_establishments')
-        .select('establishment_code')
-        .eq('user_id', selectedLeadForConversion.indicated_by)
-        .eq('status', 'active')
-        .single() // Assumindo um estabelecimento por usuário
-
-      const establishmentCode = userEstablishment?.establishment_code
-
-      // 2. Atualizar o lead COM establishment_code
-      const updateData = {
-        status: 'converted' as const,
-        arcadas_vendidas: arcadas,
-        establishment_code: establishmentCode, // CRUCIAL: Adicionar isso
-        converted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }
-
-      const { error } = await supabase
-        .from('leads')
-        .update(updateData)
-        .eq('id', selectedLeadForConversion.id)
-
-      if (error) throw error
-
-      // 3. Buscar configurações do estabelecimento específico
-      const { data: settings } = await supabase
-        .from('establishment_commissions')
-        .select('*')
-        .eq('establishment_code', establishmentCode)
-        .single()
-
-      const valorPorArcada = settings?.consultant_value_per_arcada || 750
-      const comissaoConsultor = arcadas * valorPorArcada
-
-      // 4. Criar comissão COM establishment_code
-      await supabase
-        .from('commissions')
-        .insert({
-          lead_id: selectedLeadForConversion.id,
-          user_id: selectedLeadForConversion.indicated_by,
-          clinic_id: selectedLeadForConversion.clinic_id,
-          establishment_code: establishmentCode, // CRUCIAL: Adicionar isso
-          amount: comissaoConsultor,
-          percentage: 100,
-          type: 'consultant',
-          status: 'pending',
-          arcadas_vendidas: arcadas,
-          valor_por_arcada: valorPorArcada
-        })
-
-      // 5. Se houver gerente, criar comissão dele também
-      const { data: hierarchy } = await supabase
-        .from('hierarchies')
-        .select('manager_id')
-        .eq('consultant_id', selectedLeadForConversion.indicated_by)
-        .single()
-
-
-      if (hierarchy?.manager_id) {
-        const comissaoGerente = comissaoConsultor * 0.10
-        await supabase
-          .from('commissions')
-          .insert({
-            lead_id: selectedLeadForConversion.id,
-            user_id: hierarchy.manager_id,
-            amount: comissaoGerente,
-            clinic_id: selectedLeadForConversion.clinic_id,
-            percentage: 10,
-            type: 'manager',
-            status: 'pending',
-          })
-      }
-
-      toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
-
-      // Atualizar a lista local
-      setLeads(prev => prev.map(lead =>
-        lead.id === selectedLeadForConversion.id
-          ? { ...lead, ...updateData } as Lead
-          : lead
-      ))
-
-      // Fechar modal
-      setShowArcadasModal(false)
-      setSelectedLeadForConversion(null)
-
-    } catch (error: any) {
-      console.error('Erro ao converter lead:', error)
-      toast.error('Erro ao converter lead')
     } finally {
       setUpdatingStatus(null)
     }
@@ -322,91 +388,6 @@ export default function LeadsPage() {
     }
     return labels[status] || status
   }
-
-  const handleUpdateStatus = async (leadId: string, newStatus: string, arcadas?: number) => {
-    try {
-      // Se está marcando como convertido e não passou arcadas, abrir modal
-      if (newStatus === 'converted' && !arcadas) {
-        const lead = leads.find(l => l.id === leadId)
-        if (lead) {
-          setSelectedLeadForConversion(lead)
-          setShowArcadasModal(true)
-          return
-        }
-      }
-
-      // Atualizar o lead
-      const updateData: any = {
-        status: newStatus,
-        updated_at: new Date().toISOString()
-      }
-
-      // Se for conversão, adicionar arcadas
-      if (newStatus === 'converted' && arcadas) {
-        updateData.arcadas_vendidas = arcadas
-        updateData.converted_at = new Date().toISOString()
-      }
-
-      const { error } = await supabase
-        .from('leads')
-        .update(updateData)
-        .eq('id', leadId)
-
-      if (error) throw error
-
-      // Se converteu, criar comissão apenas para leads convertidos
-      if (newStatus === 'converted' && arcadas) {
-        const lead = leads.find(l => l.id === leadId)
-        if (lead) {
-          // Calcular comissão baseada nas arcadas
-          const valorPorArcada = 750
-          const comissaoConsultor = arcadas * valorPorArcada
-
-          // Criar comissão do consultor
-          await supabase
-            .from('commissions')
-            .insert({
-              lead_id: leadId,
-              user_id: lead.indicated_by, // CORREÇÃO: usar indicated_by em vez de consultant_id
-              amount: comissaoConsultor,
-              clinic_id: lead.clinic_id,
-              percentage: 100, // 100% do valor por arcada
-              type: 'consultant',
-              status: 'pending',
-            })
-
-          // Se houver gerente, criar comissão do gerente (10% do valor total)
-          const { data: hierarchy } = await supabase
-            .from('hierarchies')
-            .select('manager_id')
-            .eq('consultant_id', lead.indicated_by)
-            .single()
-
-          if (hierarchy?.manager_id) {
-            const comissaoGerente = comissaoConsultor * 0.10
-            await supabase
-              .from('commissions')
-              .insert({
-                lead_id: leadId,
-                user_id: hierarchy.manager_id,
-                amount: comissaoGerente,
-                clinic_id: lead.clinic_id,
-                percentage: 10,
-                type: 'manager',
-                status: 'pending',
-              })
-          }
-        }
-      }
-
-      toast.success(`Status atualizado para ${getStatusLabel(newStatus)}`)
-      fetchLeads()
-    } catch (error) {
-      console.error('Erro ao atualizar status:', error)
-      toast.error('Erro ao atualizar status')
-    }
-  }
-
 
   const getStatusColor = (status: string) => {
     const option = statusOptions.find(opt => opt.value === status)
@@ -459,7 +440,7 @@ export default function LeadsPage() {
           </h1>
           <p className="text-secondary-600">
             {profile?.role === 'consultant'
-              ? 'Gerencie suas indicações'
+              ? 'Gerencie suas indicações e converta seus leads'
               : 'Gerencie todos os leads da clínica'
             }
           </p>
@@ -674,7 +655,6 @@ export default function LeadsPage() {
                 <tr>
                   <th>Nome</th>
                   <th>Contato</th>
-                  {/* <th>Estado</th> */}
                   <th>Status</th>
                   {profile?.role !== 'consultant' && <th>Indicado por</th>}
                   <th>Data</th>
@@ -705,6 +685,15 @@ export default function LeadsPage() {
                               )}
                             </div>
                           )}
+                          {/* 🔥 NOVO: Mostrar arcadas se convertido */}
+                          {lead.status === 'converted' && lead.arcadas_vendidas && (
+                            <div className="flex items-center mt-1">
+                              <StarIcon className="h-3 w-3 text-success-500 mr-1" />
+                              <span className="text-xs text-success-600 font-medium">
+                                {lead.arcadas_vendidas} arcada{lead.arcadas_vendidas > 1 ? 's' : ''} vendida{lead.arcadas_vendidas > 1 ? 's' : ''}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -722,26 +711,6 @@ export default function LeadsPage() {
                         )}
                       </div>
                     </td>
-                    {/* <td>
-                      <div className="flex items-center">
-                        <MapPinIcon className="h-4 w-4 text-secondary-400 mr-2" />
-                        <div>
-                          {lead.state && (
-                            <div className="text-sm font-medium text-secondary-900">
-                              {lead.state}
-                            </div>
-                          )}
-                          {lead.city && (
-                            <div className="text-xs text-secondary-500">
-                              {lead.city}
-                            </div>
-                          )}
-                          {!lead.state && !lead.city && (
-                            <span className="text-sm text-secondary-400">Não informado</span>
-                          )}
-                        </div>
-                      </div>
-                    </td> */}
                     <td>
                       {canEdit ? (
                         <select
@@ -794,9 +763,36 @@ export default function LeadsPage() {
                           minute: '2-digit'
                         })}
                       </div>
+                      {/* 🔥 NOVO: Mostrar data de conversão */}
+                      {lead.status === 'converted' && lead.converted_at && (
+                        <div className="text-xs text-success-600 mt-1">
+                          💰 Convertido em {new Date(lead.converted_at).toLocaleDateString('pt-BR')}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <div className="flex items-center space-x-2">
+                        {/* 🔥 NOVO: Botão de conversão rápida para consultores */}
+                        {profile?.role === 'consultant' && lead.status !== 'converted' && lead.status !== 'lost' && (
+                          <button
+                            onClick={() => handleQuickConvert(lead)}
+                            className="btn btn-success btn-sm"
+                            title="Converter Lead"
+                          >
+                            <PlayIcon className="h-4 w-4" />
+                          </button>
+                        )}
+
+                        {/* 🔥 NOVO: Mostrar comissão estimada para leads convertidos */}
+                        {lead.status === 'converted' && lead.arcadas_vendidas && (
+                          <div className="flex items-center text-xs text-success-600 bg-success-50 px-2 py-1 rounded">
+                            <CurrencyDollarIcon className="h-3 w-3 mr-1" />
+                            <span className="font-medium">
+                              R$ {(lead.arcadas_vendidas * 750).toLocaleString('pt-BR')}
+                            </span>
+                          </div>
+                        )}
+
                         <button
                           onClick={() => handleViewLead(lead.id)}
                           className="btn btn-ghost btn-sm"
@@ -853,6 +849,46 @@ export default function LeadsPage() {
         </div>
       </motion.div>
 
+      {/* 🔥 NOVO: Card de dicas para consultores */}
+      {profile?.role === 'consultant' && leads.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.8 }}
+          className="card"
+        >
+          <div className="card-body">
+            <h3 className="text-lg font-medium text-secondary-900 mb-4 flex items-center">
+              <StarIcon className="h-5 w-5 text-warning-500 mr-2" />
+              Dicas para Converter Leads
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="text-center p-4 bg-primary-50 rounded-lg">
+                <PlayIcon className="h-8 w-8 text-primary-600 mx-auto mb-2" />
+                <h4 className="font-medium text-primary-900 mb-1">Conversão Rápida</h4>
+                <p className="text-sm text-primary-700">
+                  Use o botão ▶️ para converter leads rapidamente e calcular sua comissão automaticamente
+                </p>
+              </div>
+              <div className="text-center p-4 bg-success-50 rounded-lg">
+                <CurrencyDollarIcon className="h-8 w-8 text-success-600 mx-auto mb-2" />
+                <h4 className="font-medium text-success-900 mb-1">Comissões Transparentes</h4>
+                <p className="text-sm text-success-700">
+                  Veja em tempo real quanto você ganhará por cada conversão, incluindo bônus por metas
+                </p>
+              </div>
+              <div className="text-center p-4 bg-warning-50 rounded-lg">
+                <StarIcon className="h-8 w-8 text-warning-600 mx-auto mb-2" />
+                <h4 className="font-medium text-warning-900 mb-1">Sistema de Bônus</h4>
+                <p className="text-sm text-warning-700">
+                  Ganhe bônus extras a cada 7 arcadas vendidas. Acompanhe seu progresso nos detalhes
+                </p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Lead Detail Modal */}
       <LeadDetailModal
         isOpen={isModalOpen}
@@ -861,6 +897,7 @@ export default function LeadsPage() {
         onLeadUpdate={fetchLeads}
       />
 
+      {/* 🔥 MODAL DE ARCADAS MELHORADO */}
       {showArcadasModal && selectedLeadForConversion && (
         <ArcadasModal
           isOpen={showArcadasModal}
