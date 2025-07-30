@@ -320,10 +320,10 @@ export default function ReportsPage() {
           </p>
         </div>
         
-        <button onClick={exportReport} className="btn btn-primary">
+        {/* <button onClick={exportReport} className="btn btn-primary">
           <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
           Exportar Relatório
-        </button>
+        </button> */}
       </div>
 
       {/* Filters */}

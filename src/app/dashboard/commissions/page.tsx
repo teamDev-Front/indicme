@@ -465,12 +465,12 @@ export default function CommissionsPage() {
           </p>
         </div>
 
-        {canManageCommissions && (
+        {/* {canManageCommissions && (
           <button className="btn btn-secondary">
             <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
             Exportar Relatório
           </button>
-        )}
+        )} */}
       </div>
 
       {/* Stats Cards */}
