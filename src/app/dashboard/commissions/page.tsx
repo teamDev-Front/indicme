@@ -95,26 +95,26 @@ export default function CommissionsPage() {
   // src/app/dashboard/commissions/page.tsx - CORREÇÃO DA FUNÇÃO fetchCommissions
 
   const fetchCommissions = async () => {
-    try {
-      setLoading(true)
+  try {
+    setLoading(true)
 
-      if (!profile) return
+    if (!profile) return
 
-      // Buscar clínica do usuário
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile.id)
-        .single()
+    // Buscar clínica do usuário
+    const { data: userClinic } = await supabase
+      .from('user_clinics')
+      .select('clinic_id')
+      .eq('user_id', profile.id)
+      .single()
 
-      if (!userClinic) return
+    if (!userClinic) return
 
-      // CORREÇÃO: Query melhorada para buscar comissões com relações corretas
-      let query = supabase
-        .from('commissions')
-        .select(`
+    // ✅ CORREÇÃO: Query especificando qual relacionamento usar
+    let query = supabase
+      .from('commissions')
+      .select(`
         *,
-        leads!left (
+        leads!commissions_lead_id_fkey (
           id,
           full_name,
           phone,
@@ -124,7 +124,7 @@ export default function CommissionsPage() {
           created_at,
           converted_at
         ),
-        users!left (
+        users!commissions_user_id_fkey (
           id,
           full_name,
           email,
@@ -135,72 +135,132 @@ export default function CommissionsPage() {
           name
         )
       `)
-        .eq('clinic_id', userClinic.clinic_id)
-        .order('created_at', { ascending: false })
+      .eq('clinic_id', userClinic.clinic_id)
+      .order('created_at', { ascending: false })
 
-      // ✅ CORREÇÃO: Filtros por role corrigidos e melhorados
-      if (profile.role === 'consultant') {
-        // Consultor vê apenas suas próprias comissões
+    // ✅ ALTERNATIVA: Se você quiser ambos os leads (atual e original)
+    /*
+    let query = supabase
+      .from('commissions')
+      .select(`
+        *,
+        lead:leads!commissions_lead_id_fkey (
+          id,
+          full_name,
+          phone,
+          status,
+          arcadas_vendidas,
+          establishment_code,
+          created_at,
+          converted_at
+        ),
+        original_lead:leads!commissions_original_lead_id_fkey (
+          id,
+          full_name,
+          phone,
+          status,
+          arcadas_vendidas,
+          establishment_code,
+          created_at,
+          converted_at
+        ),
+        users!commissions_user_id_fkey (
+          id,
+          full_name,
+          email,
+          role
+        ),
+        establishment_codes!left (
+          code,
+          name
+        )
+      `)
+      .eq('clinic_id', userClinic.clinic_id)
+      .order('created_at', { ascending: false })
+    */
+
+    // Filtros por role (mantidos iguais)
+    if (profile.role === 'consultant') {
+      query = query.eq('user_id', profile.id)
+    } else if (profile.role === 'manager') {
+      const { data: hierarchy } = await supabase
+        .from('hierarchies')
+        .select('consultant_id')
+        .eq('manager_id', profile.id)
+
+      const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+      consultantIds.push(profile.id)
+
+      if (consultantIds.length > 0) {
+        query = query.in('user_id', consultantIds)
+      } else {
         query = query.eq('user_id', profile.id)
-      } else if (profile.role === 'manager') {
-        // Gerente vê comissões de sua equipe + suas próprias
-        const { data: hierarchy } = await supabase
-          .from('hierarchies')
-          .select('consultant_id')
-          .eq('manager_id', profile.id)
-
-        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-        consultantIds.push(profile.id) // Incluir o próprio gerente
-
-        if (consultantIds.length > 0) {
-          query = query.in('user_id', consultantIds)
-        } else {
-          // Se não tem equipe, mostrar só as próprias comissões
-          query = query.eq('user_id', profile.id)
-        }
       }
-      // clinic_admin e clinic_viewer veem todas as comissões (sem filtro adicional)
+    }
 
-      const { data, error } = await query
+    const { data, error } = await query
 
-      if (error) {
-        console.error('❌ Erro na query de comissões:', error)
-        throw error
+    if (error) {
+      console.error('❌ Erro na query de comissões:', error)
+      throw error
+    }
+
+    console.log('✅ Comissões carregadas:', data?.length || 0)
+
+    // ✅ CORREÇÃO: Processar dados com estrutura corrigida
+    const processedCommissions = (data || []).map(commission => {
+      return {
+        ...commission,
+        // Para a primeira opção (um relacionamento)
+        leads: commission.leads ? {
+          id: commission.leads.id,
+          full_name: commission.leads.full_name || 'Nome não disponível',
+          phone: commission.leads.phone || 'Telefone não informado',
+          status: commission.leads.status || 'unknown',
+          arcadas_vendidas: commission.leads.arcadas_vendidas || 1,
+          establishment_code: commission.leads.establishment_code,
+          created_at: commission.leads.created_at,
+          converted_at: commission.leads.converted_at
+        } : null,
+        
+        // ✅ Para a segunda opção (dois relacionamentos), use isso:
+        /*
+        leads: commission.lead ? {
+          id: commission.lead.id,
+          full_name: commission.lead.full_name || 'Nome não disponível',
+          phone: commission.lead.phone || 'Telefone não informado',
+          status: commission.lead.status || 'unknown',
+          arcadas_vendidas: commission.lead.arcadas_vendidas || 1,
+          establishment_code: commission.lead.establishment_code,
+          created_at: commission.lead.created_at,
+          converted_at: commission.lead.converted_at
+        } : null,
+        original_lead: commission.original_lead ? {
+          id: commission.original_lead.id,
+          full_name: commission.original_lead.full_name || 'Nome não disponível',
+          phone: commission.original_lead.phone || 'Telefone não informado',
+          status: commission.original_lead.status || 'unknown',
+          arcadas_vendidas: commission.original_lead.arcadas_vendidas || 1,
+          establishment_code: commission.original_lead.establishment_code,
+          created_at: commission.original_lead.created_at,
+          converted_at: commission.original_lead.converted_at
+        } : null,
+        */
+        
+        users: commission.users ? {
+          id: commission.users.id,
+          full_name: commission.users.full_name || 'Usuário não identificado',
+          email: commission.users.email || 'Email não disponível',
+          role: commission.users.role || 'consultant'
+        } : null,
+        establishment: commission.establishment_codes ? {
+          code: commission.establishment_codes.code,
+          name: commission.establishment_codes.name || commission.establishment_codes.code
+        } : null
       }
+    })
 
-      console.log('✅ Comissões carregadas:', data?.length || 0)
-
-      // CORREÇÃO: Processar dados para garantir que todas as relações estão corretas
-      const processedCommissions = (data || []).map(commission => {
-        return {
-          ...commission,
-          // Garantir que temos os dados do lead
-          leads: commission.leads ? {
-            id: commission.leads.id,
-            full_name: commission.leads.full_name || 'Nome não disponível',
-            phone: commission.leads.phone || 'Telefone não informado',
-            status: commission.leads.status || 'unknown',
-            arcadas_vendidas: commission.leads.arcadas_vendidas || 1,
-            establishment_code: commission.leads.establishment_code,
-            created_at: commission.leads.created_at,
-            converted_at: commission.leads.converted_at
-          } : null,
-          // Garantir que temos os dados do usuário
-          users: commission.users ? {
-            id: commission.users.id,
-            full_name: commission.users.full_name || 'Usuário não identificado',
-            email: commission.users.email || 'Email não disponível',
-            role: commission.users.role || 'consultant'
-          } : null,
-          // Garantir dados do estabelecimento
-          establishment: commission.establishment_codes ? {
-            code: commission.establishment_codes.code,
-            name: commission.establishment_codes.name || commission.establishment_codes.code
-          } : null
-        }
-      })
-
-      setCommissions(processedCommissions)
+    setCommissions(processedCommissions)
 
       // ✅ CORREÇÃO: Calcular estatísticas com dados processados
       const totalCommissions = processedCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
