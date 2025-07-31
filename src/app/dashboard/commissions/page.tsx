@@ -768,14 +768,14 @@ export default function CommissionsPage() {
                               × {commission.arcadas_vendidas} arcada{commission.arcadas_vendidas > 1 ? 's' : ''}
                             </div>
                           )}
-                          {commission.valor_bonus && commission.valor_bonus > 0 && (
+                          {/* {commission.valor_bonus && commission.valor_bonus > 0 && (
                             <div className="text-warning-600">
                               Bônus: R$ {commission.valor_bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                               {commission.bonus_conquistados && commission.bonus_conquistados > 0 &&
                                 ` (${commission.bonus_conquistados}x)`
                               }
                             </div>
-                          )}
+                          )} */}
                           {/* 🔥 NOVO: Mostrar cálculo detalhado para debug */}
                           {process.env.NODE_ENV === 'development' && (
                             <div className="text-xs text-gray-400">
