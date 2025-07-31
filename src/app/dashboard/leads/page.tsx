@@ -53,6 +53,8 @@ interface Lead {
     full_name: string
     email: string
   }
+  establishment_name?: string
+
 }
 
 const statusOptions = [
@@ -94,12 +96,12 @@ export default function LeadsPage() {
       let query = supabase
         .from('leads')
         .select(`
-          *,
-          users:indicated_by (
-            full_name,
-            email
-          )
-        `)
+        *,
+        users:indicated_by (
+          full_name,
+          email
+        )
+      `)
         .order('created_at', { ascending: false })
 
       // Filtrar baseado no role do usuário
@@ -126,26 +128,71 @@ export default function LeadsPage() {
       }
 
       const leadsData = data || []
-      setLeads(leadsData)
+
+      // 🔥 NOVO: Para cada lead, buscar o estabelecimento do consultor
+      const leadsWithEstablishments = await Promise.all(
+        leadsData.map(async (lead) => {
+          try {
+            // Buscar estabelecimento do consultor que indicou este lead
+            const { data: userEstablishment } = await supabase
+              .from('user_establishments')
+              .select(`
+              establishment_code,
+              establishment_codes!user_establishments_establishment_code_fkey (
+                name
+              )
+            `)
+              .eq('user_id', lead.indicated_by)
+              .eq('status', 'active')
+              .single()
+
+            let establishmentName = ''
+            if (userEstablishment?.establishment_codes) {
+              const estData = Array.isArray(userEstablishment.establishment_codes)
+                ? userEstablishment.establishment_codes[0]
+                : userEstablishment.establishment_codes
+
+              establishmentName = estData?.name || ''
+            }
+
+            return {
+              ...lead,
+              establishment_name: establishmentName
+            }
+          } catch (error) {
+            console.warn('Erro ao buscar estabelecimento para lead:', lead.id, error)
+            return {
+              ...lead,
+              establishment_name: ''
+            }
+          }
+        })
+      )
+
+      setLeads(leadsWithEstablishments)
 
       // Extrair consultores únicos para o filtro
       const uniqueConsultants = Array.from(
         new Map(
-          leadsData
+          leadsWithEstablishments
             .filter(lead => lead.users)
             .map(lead => [lead.users!.full_name, { id: lead.indicated_by, full_name: lead.users!.full_name }])
         ).values()
       )
       setConsultants(uniqueConsultants)
 
-      // Extrair estabelecimentos únicos para o filtro
-      const { data: establishmentCodes } = await supabase
-        .from('establishment_codes')
-        .select('code, name')
-        .eq('is_active', true)
+      // 🔥 CORRIGIDO: Extrair estabelecimentos únicos dos leads processados
+      const uniqueEstablishments = Array.from(
+        new Set(
+          leadsWithEstablishments
+            .map(lead => lead.establishment_name)
+            .filter(name => name && name.trim() !== '') // Filtrar nomes vazios
+        )
+      ).sort()
 
-      const uniqueEstablishments = establishmentCodes?.map(est => est.name).sort() || []
       setEstablishments(uniqueEstablishments)
+
+      console.log('✅ Estabelecimentos únicos encontrados:', uniqueEstablishments)
 
     } catch (error: any) {
       console.error('Erro ao buscar leads:', error)
@@ -556,15 +603,18 @@ export default function LeadsPage() {
       lead.cpf?.includes(searchTerm)
 
     const matchesStatus = !statusFilter || lead.status === statusFilter
+
+    // 🔥 CORRIGIDO: Filtrar pelo establishment_name em vez de establishment_code
     const matchesEstablishment = !establishmentFilter ||
-      (lead.establishment_code && establishments.includes(establishmentFilter))
+      (lead.establishment_name && lead.establishment_name === establishmentFilter)
+
     const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
 
     const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
 
     return matchesSearch && matchesStatus && matchesEstablishment && matchesConsultant && matchesDate
-
   })
+
 
   const stats = {
     total: leads.length,
@@ -745,17 +795,17 @@ export default function LeadsPage() {
             </select>
 
             <select
-  className="input"
-  value={establishmentFilter}
-  onChange={(e) => setEstablishmentFilter(e.target.value)}
->
-  <option value="">Todos os estabelecimentos</option>
-  {establishments.map(establishment => (
-    <option key={establishment} value={establishment}>
-      {establishment}
-    </option>
-  ))}
-</select>
+              className="input"
+              value={establishmentFilter}
+              onChange={(e) => setEstablishmentFilter(e.target.value)}
+            >
+              <option value="">Todos os estabelecimentos</option>
+              {establishments.map(establishment => (
+                <option key={establishment} value={establishment}>
+                  {establishment}
+                </option>
+              ))}
+            </select>
 
 
             {(profile?.role === 'clinic_admin' || profile?.role === 'clinic_viewer' || profile?.role === 'manager') && (
@@ -905,6 +955,12 @@ export default function LeadsPage() {
                             <div className="text-xs text-secondary-500">
                               {lead.users?.email}
                             </div>
+                            {/* 🔥 NOVO: Mostrar estabelecimento */}
+                            {lead.establishment_name && (
+                              <div className="text-xs text-primary-600 mt-1">
+                                📍 {lead.establishment_name}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
