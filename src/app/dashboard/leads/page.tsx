@@ -69,14 +69,14 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [stateFilter, setStateFilter] = useState('')
+  const [establishmentFilter, setEstablishmentFilter] = useState('')
+  const [establishments, setEstablishments] = useState<string[]>([])
   const [consultantFilter, setConsultantFilter] = useState('')
   const [dateFilter, setDateFilter] = useState('')
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [consultants, setConsultants] = useState<Array<{ id: string, full_name: string }>>([])
-  const [states, setStates] = useState<string[]>([])
   const [showArcadasModal, setShowArcadasModal] = useState(false)
   const [selectedLeadForConversion, setSelectedLeadForConversion] = useState<Lead | null>(null)
   const supabase = createClient()
@@ -138,11 +138,14 @@ export default function LeadsPage() {
       )
       setConsultants(uniqueConsultants)
 
-      // Extrair estados únicos para o filtro
-      const uniqueStates = Array.from(
-        new Set(leadsData.filter(lead => lead.state).map(lead => lead.state!))
-      ).sort()
-      setStates(uniqueStates)
+      // Extrair estabelecimentos únicos para o filtro
+      const { data: establishmentCodes } = await supabase
+        .from('establishment_codes')
+        .select('code, name')
+        .eq('is_active', true)
+
+      const uniqueEstablishments = establishmentCodes?.map(est => est.name).sort() || []
+      setEstablishments(uniqueEstablishments)
 
     } catch (error: any) {
       console.error('Erro ao buscar leads:', error)
@@ -553,12 +556,14 @@ export default function LeadsPage() {
       lead.cpf?.includes(searchTerm)
 
     const matchesStatus = !statusFilter || lead.status === statusFilter
-    const matchesState = !stateFilter || lead.state === stateFilter
+    const matchesEstablishment = !establishmentFilter ||
+      (lead.establishment_code && establishments.includes(establishmentFilter))
     const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
 
     const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
 
-    return matchesSearch && matchesStatus && matchesState && matchesConsultant && matchesDate
+    return matchesSearch && matchesStatus && matchesEstablishment && matchesConsultant && matchesDate
+
   })
 
   const stats = {
@@ -740,17 +745,18 @@ export default function LeadsPage() {
             </select>
 
             <select
-              className="input"
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value)}
-            >
-              <option value="">Todos os estados</option>
-              {states.map(state => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
-            </select>
+  className="input"
+  value={establishmentFilter}
+  onChange={(e) => setEstablishmentFilter(e.target.value)}
+>
+  <option value="">Todos os estabelecimentos</option>
+  {establishments.map(establishment => (
+    <option key={establishment} value={establishment}>
+      {establishment}
+    </option>
+  ))}
+</select>
+
 
             {(profile?.role === 'clinic_admin' || profile?.role === 'clinic_viewer' || profile?.role === 'manager') && (
               <select
@@ -778,7 +784,7 @@ export default function LeadsPage() {
               onClick={() => {
                 setSearchTerm('')
                 setStatusFilter('')
-                setStateFilter('')
+                setEstablishmentFilter('')
                 setConsultantFilter('')
                 setDateFilter('')
               }}

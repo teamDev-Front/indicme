@@ -22,6 +22,7 @@ import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import CreateConsultantModal from '@/components/consultants/CreateConsultantModal'
 import ConsultantDetailModal from '@/components/consultants/ConsultantDetailModal'
+import EditConsultantModal from '@/components/consultants/EditConsultantModal'
 
 interface Consultant {
   id: string
@@ -58,6 +59,8 @@ export default function ConsultantsPage() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [selectedConsultantId, setSelectedConsultantId] = useState<string | null>(null)
+  const [selectedConsultantForEdit, setSelectedConsultantForEdit] = useState<Consultant | null>(null)
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [establishments, setEstablishments] = useState<string[]>([])
   const supabase = createClient()
@@ -872,9 +875,14 @@ export default function ConsultantsPage() {
                             <button
                               className="btn btn-ghost btn-sm"
                               title="Editar"
+                              onClick={() => {
+                                setSelectedConsultantForEdit(consultant)
+                                setIsEditModalOpen(true)
+                              }}
                             >
                               <PencilIcon className="h-4 w-4" />
                             </button>
+
                             <button
                               onClick={() => {
                                 setSelectedConsultant(consultant)
@@ -1004,6 +1012,15 @@ export default function ConsultantsPage() {
           </div>
         </Dialog>
       </Transition>
+      <EditConsultantModal
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false)
+          setSelectedConsultantForEdit(null)
+        }}
+        consultant={selectedConsultantForEdit}
+        onSuccess={fetchConsultants}
+      />
     </div>
   )
 }

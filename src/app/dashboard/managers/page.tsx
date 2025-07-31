@@ -26,6 +26,7 @@ import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import EstablishmentAutocomplete from '@/components/establishments/EstablishmentAutocomplete'
 import ManagerDetailModal from '@/components/managers/ManagerDetailModal' // 🔥 NOVO IMPORT
+import EditManagerModal from '@/components/managers/EditManagerModal'
 
 interface Manager {
   id: string
@@ -57,6 +58,8 @@ export default function ManagersPage() {
   const [establishmentFilter, setEstablishmentFilter] = useState('')
   const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [selectedManagerForEdit, setSelectedManagerForEdit] = useState<Manager | null>(null)
+  const [isEditManagerModalOpen, setIsEditManagerModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false) // 🔥 NOVO
   const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null) // 🔥 NOVO
@@ -598,7 +601,7 @@ export default function ManagersPage() {
       setSubmitting(false)
     }
   }
-  
+
   const handleStatusChange = async (managerId: string, newStatus: string) => {
     try {
       const { error } = await supabase
@@ -688,10 +691,10 @@ export default function ManagersPage() {
       await new Promise(resolve => setTimeout(resolve, 1000))
 
       console.log('🔐 Removendo usuário do auth...')
-      
+
       try {
         const { error: authError } = await supabase.auth.admin.deleteUser(selectedManager.id)
-        
+
         if (authError) {
           console.warn('Erro no auth.deleteUser (não crítico):', authError)
           toast.success('Gerente removido do sistema! (Usuário permanece no auth, mas está inativo)')
@@ -712,7 +715,7 @@ export default function ManagersPage() {
 
     } catch (error: any) {
       console.error('❌ Erro ao deletar gerente:', error)
-      
+
       if (error.message.includes('consultores')) {
         toast.error('Não é possível excluir gerente com consultores associados')
       } else if (error.message.includes('foreign key')) {
@@ -1121,7 +1124,10 @@ export default function ManagersPage() {
                         {canEdit && (
                           <>
                             <button
-                              onClick={() => handleOpenModal('edit', manager)}
+                              onClick={() => {
+                                setSelectedManagerForEdit(manager)
+                                setIsEditManagerModalOpen(true)
+                              }}
                               className="btn btn-ghost btn-sm"
                               title="Editar"
                             >
@@ -1425,6 +1431,15 @@ export default function ManagersPage() {
           </div>
         </Dialog>
       </Transition>
+      <EditManagerModal
+        isOpen={isEditManagerModalOpen}
+        onClose={() => {
+          setIsEditManagerModalOpen(false)
+          setSelectedManagerForEdit(null)
+        }}
+        manager={selectedManagerForEdit}
+        onSuccess={fetchManagers}
+      />
     </div>
   )
 }
