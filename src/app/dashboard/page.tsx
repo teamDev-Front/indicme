@@ -1039,7 +1039,7 @@ export default function DashboardPage() {
               </div>
               <div className="ml-4 flex-1">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-secondary-500">Receita Total</p>
+                  <p className="text-xs font-medium text-secondary-500">Comissões Totais</p>
                   <span className="text-xs text-secondary-400">
                     {stats.totalArcadas} arcadas
                   </span>
