@@ -1,4 +1,4 @@
-// src/app/dashboard/consultants/page.tsx
+// src/app/dashboard/consultants/page.tsx - ATUALIZADO com Modal de Detalhes
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -21,6 +21,7 @@ import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import CreateConsultantModal from '@/components/consultants/CreateConsultantModal'
+import ConsultantDetailModal from '@/components/consultants/ConsultantDetailModal'
 
 interface Consultant {
   id: string
@@ -31,11 +32,11 @@ interface Consultant {
   status: 'active' | 'inactive' | 'pending'
   created_at: string
   updated_at: string
-  establishment_count?: number // Quantos estabelecimentos este consultor possui
-  establishment_names?: string[] // Nomes dos estabelecimentos
+  establishment_count?: number
+  establishment_names?: string[]
   _count?: {
     leads: number
-    arcadas_vendidas: number // Mudança: arcadas ao invés de comissões
+    arcadas_vendidas: number
   }
   manager?: {
     id: string
@@ -55,6 +56,8 @@ export default function ConsultantsPage() {
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+  const [selectedConsultantId, setSelectedConsultantId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [establishments, setEstablishments] = useState<string[]>([])
   const supabase = createClient()
@@ -127,18 +130,6 @@ export default function ConsultantsPage() {
             `)
               .eq('consultant_id', consultant.id)
               .single(),
-            // CORREÇÃO: Query melhorada para buscar nomes dos estabelecimentos
-            supabase
-              .from('user_establishments')
-              .select(`
-              establishment_code,
-              establishment_codes!inner (
-                name,
-                description
-              )
-            `)
-              .eq('user_id', consultant.id)
-              .eq('status', 'active')
           ])
 
           // Calcular total de arcadas vendidas
@@ -153,12 +144,12 @@ export default function ConsultantsPage() {
           const userEstablishments = await supabase
             .from('user_establishments')
             .select(`
-    establishment_code,
-    establishment_code (
-      name,
-      description
-    )
-  `)
+              establishment_code,
+              establishment_codes!user_establishments_establishment_code_fkey (
+                name,
+                description
+              )
+            `)
             .eq('user_id', consultant.id)
             .eq('status', 'active')
 
@@ -167,19 +158,24 @@ export default function ConsultantsPage() {
 
           if (userEstablishments.data && userEstablishments.data.length > 0) {
             for (const est of userEstablishments.data) {
-              // CORREÇÃO: establishment_codes é um objeto, não array
-              if (est.establishment_code && est.establishment_code.name) {
-                establishmentNames.push(est.establishment_code.name)
+              // Verificar se establishment_codes existe e tem dados
+              if (est.establishment_codes) {
+                // establishment_codes pode ser um objeto ou array
+                const estData = Array.isArray(est.establishment_codes)
+                  ? est.establishment_codes[0]
+                  : est.establishment_codes
+                
+                if (estData && estData.name) {
+                  establishmentNames.push(estData.name)
+                } else {
+                  // Fallback: usar o código se não tiver nome
+                  establishmentNames.push(`Estabelecimento ${est.establishment_code}`)
+                }
               } else {
-                // Fallback: usar o código se não tiver nome
+                // Fallback se não tiver dados do estabelecimento
                 establishmentNames.push(`Estabelecimento ${est.establishment_code}`)
               }
             }
-          }
-
-          // Se não tem estabelecimentos, adicionar placeholder
-          if (establishmentNames.length === 0) {
-            establishmentNames.push('Sem estabelecimento')
           }
 
           // Se não tem estabelecimentos, adicionar placeholder
@@ -195,7 +191,7 @@ export default function ConsultantsPage() {
               managerInfo = {
                 id: manager.id,
                 full_name: manager.full_name,
-                establishment_name: establishmentNames[0] // Usar primeiro estabelecimento
+                establishment_name: establishmentNames[0]
               }
             }
           }
@@ -233,6 +229,7 @@ export default function ConsultantsPage() {
       setLoading(false)
     }
   }
+
   const handleStatusChange = async (consultantId: string, newStatus: string) => {
     try {
       const { error } = await supabase
@@ -277,6 +274,19 @@ export default function ConsultantsPage() {
     }
   }
 
+  // 🔥 NOVA FUNÇÃO: Abrir modal de detalhes
+  const handleViewConsultant = (consultantId: string) => {
+    console.log('👁️ Abrindo detalhes do consultor:', consultantId)
+    setSelectedConsultantId(consultantId)
+    setIsDetailModalOpen(true)
+  }
+
+  // 🔥 NOVA FUNÇÃO: Fechar modal de detalhes
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false)
+    setSelectedConsultantId(null)
+  }
+
   const filteredConsultants = consultants.filter(consultant => {
     const matchesSearch = !searchTerm ||
       consultant.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -284,9 +294,7 @@ export default function ConsultantsPage() {
       consultant.establishment_names?.some(establishment => establishment.toLowerCase().includes(searchTerm.toLowerCase()))
 
     const matchesStatus = !statusFilter || consultant.status === statusFilter
-
     const matchesEstablishment = !establishmentFilter || consultant.establishment_names?.includes(establishmentFilter)
-
     const matchesEstablishmentCount = !establishmentCountFilter ||
       (establishmentCountFilter === '1' && consultant.establishment_count === 1) ||
       (establishmentCountFilter === '2' && consultant.establishment_count === 2) ||
@@ -686,9 +694,11 @@ export default function ConsultantsPage() {
                     </td>
                     <td>
                       <div className="flex items-center space-x-2">
+                        {/* 🔥 BOTÃO ATUALIZADO: Agora abre o modal de detalhes */}
                         <button
                           className="btn btn-ghost btn-sm"
-                          title="Visualizar"
+                          title="Visualizar Detalhes"
+                          onClick={() => handleViewConsultant(consultant.id)}
                         >
                           <EyeIcon className="h-4 w-4" />
                         </button>
@@ -751,6 +761,13 @@ export default function ConsultantsPage() {
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onSuccess={fetchConsultants}
+      />
+
+      {/* 🔥 NOVO: Modal de Detalhes do Consultor */}
+      <ConsultantDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={handleCloseDetailModal}
+        consultantId={selectedConsultantId}
       />
 
       {/* Delete Confirmation Modal */}
