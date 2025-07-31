@@ -159,235 +159,336 @@ export default function LeadsPage() {
     setShowArcadasModal(true)
   }
 
-  
-// SUBSTITUA a função handleConfirmConversion no arquivo LeadsPage.tsx
-// Adicionando logs detalhados para debug
 
-const handleConfirmConversion = async (arcadas: number) => {
-  if (!selectedLeadForConversion) return
+  // SUBSTITUA a função handleConfirmConversion no arquivo LeadsPage.tsx
+  // Adicionando logs detalhados para debug
 
-  try {
-    console.log('🎯 INICIANDO CONVERSÃO COM DEBUG DETALHADO')
-    console.log('📊 Lead:', selectedLeadForConversion.full_name, '| Arcadas:', arcadas)
+  const handleConfirmConversion = async (arcadas: number) => {
+    if (!selectedLeadForConversion) return
 
-    // ===== STEP 1: VERIFICAÇÕES DE SEGURANÇA =====
-    const { data: currentLead, error: checkError } = await supabase
-      .from('leads')
-      .select('status, arcadas_vendidas')
-      .eq('id', selectedLeadForConversion.id)
-      .single()
+    try {
+      console.log('🎯 INICIANDO CONVERSÃO COM DEBUG DETALHADO')
+      console.log('📊 Lead:', selectedLeadForConversion.full_name, '| Arcadas:', arcadas)
 
-    if (checkError) {
-      console.error('❌ Erro ao verificar status do lead:', checkError)
-      throw checkError
-    }
+      // ===== STEP 1: VERIFICAÇÕES DE SEGURANÇA =====
+      const { data: currentLead, error: checkError } = await supabase
+        .from('leads')
+        .select('status, arcadas_vendidas')
+        .eq('id', selectedLeadForConversion.id)
+        .single()
 
-    if (currentLead.status === 'converted') {
-      console.log('⚠️ LEAD JÁ CONVERTIDO - ABORTANDO')
-      toast.error('Este lead já foi convertido!')
-      setShowArcadasModal(false)
-      setSelectedLeadForConversion(null)
-      return
-    }
+      if (checkError) {
+        console.error('❌ Erro ao verificar status do lead:', checkError)
+        throw checkError
+      }
 
-    // ===== STEP 2: BUSCAR ESTABLISHMENT_CODE =====
-    console.log('🔍 Buscando establishment_code para usuário:', selectedLeadForConversion.indicated_by)
-    
-    const { data: userEstablishment, error: userEstError } = await supabase
-      .from('user_establishments')
-      .select('establishment_code')
-      .eq('user_id', selectedLeadForConversion.indicated_by)
-      .eq('status', 'active')
-      .single()
-
-    if (userEstError) {
-      console.error('❌ Erro ao buscar establishment do usuário:', userEstError)
-    }
-
-    const establishmentCode = userEstablishment?.establishment_code
-    console.log('🏢 Establishment code encontrado:', establishmentCode)
-
-    if (!establishmentCode) {
-      console.error('❌ ESTABLISHMENT CODE NÃO ENCONTRADO!')
-      toast.error('Erro: Código do estabelecimento não encontrado para este consultor')
-      return
-    }
-
-    // ===== STEP 3: BUSCAR CONFIGURAÇÕES DO ESTABELECIMENTO =====
-    console.log('⚙️ Buscando configurações para estabelecimento:', establishmentCode)
-    
-    const { data: settings, error: settingsError } = await supabase
-      .from('establishment_commissions')
-      .select('*')
-      .eq('establishment_code', establishmentCode)
-      .single()
-
-    if (settingsError) {
-      console.error('❌ Erro ao buscar configurações:', settingsError)
-      console.log('⚠️ Usando configurações padrão')
-    }
-
-    // 🔥 PONTO CRÍTICO: VERIFICAR OS VALORES AQUI
-    const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
-    const managerValuePerArcada = settings?.manager_value_per_arcada || 750
-    
-    console.log('💰 CONFIGURAÇÕES CARREGADAS:')
-    console.log('   - Valor por arcada (consultor):', consultantValuePerArcada)
-    console.log('   - Valor por arcada (gerente):', managerValuePerArcada)
-    console.log('   - Arcadas selecionadas:', arcadas)
-    console.log('   - Valor total calculado:', arcadas * consultantValuePerArcada)
-
-    // ===== VERIFICAR COMISSÕES EXISTENTES =====
-    const { data: existingCommissions, error: commissionsCheckError } = await supabase
-      .from('commissions')
-      .select('id, amount, type, establishment_code, valor_por_arcada, arcadas_vendidas')
-      .eq('lead_id', selectedLeadForConversion.id)
-
-    if (commissionsCheckError) {
-      console.error('❌ Erro ao verificar comissões existentes:', commissionsCheckError)
-      throw commissionsCheckError
-    }
-
-    if (existingCommissions && existingCommissions.length > 0) {
-      console.log('🔍 COMISSÕES EXISTENTES ENCONTRADAS:')
-      console.table(existingCommissions)
-
-      const consultantCommission = existingCommissions.find(c => c.type === 'consultant')
-      
-      if (consultantCommission) {
-        const expectedAmount = arcadas * consultantValuePerArcada
-        const hasWrongAmount = Math.abs(consultantCommission.amount - expectedAmount) > 0.01
-        const hasWrongEstablishment = !consultantCommission.establishment_code || 
-                                     consultantCommission.establishment_code !== establishmentCode
-        
-        console.log('🔍 VERIFICAÇÃO DE VALORES:')
-        console.log('   - Valor atual na comissão:', consultantCommission.amount)
-        console.log('   - Valor esperado:', expectedAmount)
-        console.log('   - Establishment atual:', consultantCommission.establishment_code)
-        console.log('   - Establishment esperado:', establishmentCode)
-        console.log('   - Precisa corrigir valor?', hasWrongAmount)
-        console.log('   - Precisa corrigir establishment?', hasWrongEstablishment)
-
-        if (hasWrongAmount || hasWrongEstablishment) {
-          console.log('🔧 CORRIGINDO COMISSÃO COM VALORES INCORRETOS...')
-          
-          const { error: updateError } = await supabase
-            .from('commissions')
-            .update({
-              amount: expectedAmount,
-              establishment_code: establishmentCode,
-              valor_por_arcada: consultantValuePerArcada,
-              arcadas_vendidas: arcadas,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', consultantCommission.id)
-
-          if (updateError) {
-            console.error('❌ Erro ao corrigir comissão:', updateError)
-            throw updateError
-          }
-
-          console.log('✅ COMISSÃO CORRIGIDA COM SUCESSO!')
-          toast.success('Lead convertido e comissão computada!')
-          
-        } else {
-          console.log('✅ COMISSÃO JÁ ESTÁ CORRETA')
-          toast.success('Lead já convertido com valores corretos!')
-        }
-
-        // Atualizar o lead se necessário
-        if (currentLead.status !== 'converted') {
-          await supabase
-            .from('leads')
-            .update({
-              status: 'converted',
-              arcadas_vendidas: arcadas,
-              establishment_code: establishmentCode,
-              converted_at: new Date().toISOString()
-            })
-            .eq('id', selectedLeadForConversion.id)
-        }
-
+      if (currentLead.status === 'converted') {
+        console.log('⚠️ LEAD JÁ CONVERTIDO - ABORTANDO')
+        toast.error('Este lead já foi convertido!')
         setShowArcadasModal(false)
         setSelectedLeadForConversion(null)
-        fetchLeads() // Recarregar a lista
         return
       }
+
+      // ===== STEP 2: BUSCAR ESTABLISHMENT_CODE =====
+      console.log('🔍 Buscando establishment_code para usuário:', selectedLeadForConversion.indicated_by)
+
+      const { data: userEstablishment, error: userEstError } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', selectedLeadForConversion.indicated_by)
+        .eq('status', 'active')
+        .single()
+
+      if (userEstError) {
+        console.error('❌ Erro ao buscar establishment do usuário:', userEstError)
+      }
+
+      const establishmentCode = userEstablishment?.establishment_code
+      console.log('🏢 Establishment code encontrado:', establishmentCode)
+
+      if (!establishmentCode) {
+        console.error('❌ ESTABLISHMENT CODE NÃO ENCONTRADO!')
+        toast.error('Erro: Código do estabelecimento não encontrado para este consultor')
+        return
+      }
+
+      // ===== STEP 3: BUSCAR CONFIGURAÇÕES DO ESTABELECIMENTO =====
+      console.log('⚙️ Buscando configurações para estabelecimento:', establishmentCode)
+
+      const { data: settings, error: settingsError } = await supabase
+        .from('establishment_commissions')
+        .select('*')
+        .eq('establishment_code', establishmentCode)
+        .single()
+
+      if (settingsError) {
+        console.error('❌ Erro ao buscar configurações:', settingsError)
+        console.log('⚠️ Usando configurações padrão')
+      }
+
+      // 🔥 CONFIGURAÇÕES CORRETAS
+      const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
+      const managerValuePerArcada = settings?.manager_value_per_arcada || 750
+      const managerBonusActive = settings?.manager_bonus_active !== false
+
+      console.log('💰 CONFIGURAÇÕES CARREGADAS:')
+      console.log('   - Valor por arcada (consultor):', consultantValuePerArcada)
+      console.log('   - Valor por arcada (gerente):', managerValuePerArcada)
+      console.log('   - Bônus gerente ativo:', managerBonusActive)
+      console.log('   - Arcadas selecionadas:', arcadas)
+
+      // ===== STEP 4: VERIFICAR COMISSÕES EXISTENTES =====
+      const { data: existingCommissions, error: commissionsCheckError } = await supabase
+        .from('commissions')
+        .select('id, amount, type, establishment_code, valor_por_arcada, arcadas_vendidas, user_id')
+        .eq('lead_id', selectedLeadForConversion.id)
+
+      if (commissionsCheckError) {
+        console.error('❌ Erro ao verificar comissões existentes:', commissionsCheckError)
+        throw commissionsCheckError
+      }
+
+      if (existingCommissions && existingCommissions.length > 0) {
+        console.log('🔍 COMISSÕES EXISTENTES ENCONTRADAS:')
+        console.table(existingCommissions)
+        toast.error('Este lead já possui comissões registradas!')
+        setShowArcadasModal(false)
+        setSelectedLeadForConversion(null)
+        return
+      }
+
+      // ===== STEP 5: ATUALIZAR O LEAD =====
+      console.log('📝 Atualizando lead para convertido...')
+
+      const { error: leadError } = await supabase
+        .from('leads')
+        .update({
+          status: 'converted',
+          arcadas_vendidas: arcadas,
+          establishment_code: establishmentCode,
+          converted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLeadForConversion.id)
+
+      if (leadError) {
+        console.error('❌ Erro ao atualizar lead:', leadError)
+        throw leadError
+      }
+
+      console.log('✅ LEAD ATUALIZADO COM SUCESSO')
+
+      // ===== STEP 6: CALCULAR COMISSÃO DO CONSULTOR =====
+      console.log('💰 CALCULANDO COMISSÃO DO CONSULTOR...')
+
+      // Buscar arcadas já vendidas pelo consultor neste estabelecimento
+      const { data: consultantLeads } = await supabase
+        .from('leads')
+        .select('arcadas_vendidas')
+        .eq('indicated_by', selectedLeadForConversion.indicated_by)
+        .eq('establishment_code', establishmentCode)
+        .eq('status', 'converted')
+        .neq('id', selectedLeadForConversion.id) // Excluir o lead atual
+
+      const arcadasAnteriores = consultantLeads?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+      const arcadasTotais = arcadasAnteriores + arcadas
+
+      // Valor base do consultor
+      const valorBaseConsultor = arcadas * consultantValuePerArcada
+
+      // Calcular bônus do consultor (se configurado)
+      let valorBonusConsultor = 0
+      let bonusConsultorGanhos = 0
+
+      if (settings?.consultant_bonus_every_arcadas && settings?.consultant_bonus_value) {
+        const bonusACada = settings.consultant_bonus_every_arcadas
+        const valorBonusUnitario = settings.consultant_bonus_value
+
+        const bonusAntes = Math.floor(arcadasAnteriores / bonusACada)
+        const bonusDepois = Math.floor(arcadasTotais / bonusACada)
+
+        bonusConsultorGanhos = bonusDepois - bonusAntes
+        valorBonusConsultor = bonusConsultorGanhos * valorBonusUnitario
+      }
+
+      const valorTotalConsultor = valorBaseConsultor + valorBonusConsultor
+
+      console.log('💰 COMISSÃO CONSULTOR:')
+      console.log('   - Valor base:', valorBaseConsultor)
+      console.log('   - Bônus ganhos:', bonusConsultorGanhos)
+      console.log('   - Valor bônus:', valorBonusConsultor)
+      console.log('   - Valor total:', valorTotalConsultor)
+
+      // ===== STEP 7: CRIAR COMISSÃO DO CONSULTOR =====
+      const { data: consultantCommissionData, error: consultantCommissionError } = await supabase
+        .from('commissions')
+        .insert({
+          lead_id: selectedLeadForConversion.id,
+          user_id: selectedLeadForConversion.indicated_by,
+          clinic_id: selectedLeadForConversion.clinic_id,
+          establishment_code: establishmentCode,
+          amount: valorTotalConsultor,
+          percentage: 100,
+          type: 'consultant',
+          status: 'pending',
+          arcadas_vendidas: arcadas, // 🔥 CORRIGIDO: Campo arcadas
+          valor_por_arcada: consultantValuePerArcada,
+          bonus_conquistados: bonusConsultorGanhos,
+          valor_bonus: valorBonusConsultor
+        })
+        .select('id, amount')
+        .single()
+
+      if (consultantCommissionError) {
+        console.error('❌ ERRO AO CRIAR COMISSÃO DO CONSULTOR:', consultantCommissionError)
+        throw consultantCommissionError
+      }
+
+      console.log('✅ COMISSÃO DO CONSULTOR CRIADA:', consultantCommissionData)
+
+      // ===== STEP 8: VERIFICAR SE CONSULTOR TEM GERENTE =====
+      console.log('👥 Verificando se consultor tem gerente...')
+
+      const { data: hierarchy, error: hierarchyError } = await supabase
+        .from('hierarchies')
+        .select('manager_id')
+        .eq('consultant_id', selectedLeadForConversion.indicated_by)
+        .single()
+
+      if (hierarchyError && hierarchyError.code !== 'PGRST116') {
+        console.warn('⚠️ Erro ao buscar hierarquia:', hierarchyError)
+      }
+
+      if (hierarchy?.manager_id) {
+        console.log('👔 Gerente encontrado:', hierarchy.manager_id)
+
+        // ===== STEP 9: CALCULAR COMISSÃO DO GERENTE =====
+        console.log('💰 CALCULANDO COMISSÃO DO GERENTE...')
+
+        // 🔥 COMISSÃO BASE INDEPENDENTE DO GERENTE
+        const comissaoBaseGerente = arcadas * managerValuePerArcada
+
+        console.log('💰 COMISSÃO BASE GERENTE:')
+        console.log('   - Arcadas:', arcadas)
+        console.log('   - Valor por arcada (gerente):', managerValuePerArcada)
+        console.log('   - Comissão base total:', comissaoBaseGerente)
+
+        let bonusGerente = 0
+
+        // Calcular bônus apenas se estiver ativo
+        if (managerBonusActive && settings) {
+          console.log('🎯 Calculando bônus do gerente...')
+
+          // Buscar equipe do gerente
+          const { data: teamHierarchy } = await supabase
+            .from('hierarchies')
+            .select('consultant_id')
+            .eq('manager_id', hierarchy.manager_id)
+
+          const teamIds = teamHierarchy?.map(h => h.consultant_id) || []
+          teamIds.push(hierarchy.manager_id) // Incluir o próprio gerente
+
+          console.log('👥 IDs da equipe:', teamIds)
+
+          // Buscar total de arcadas da equipe neste estabelecimento
+          const { data: teamLeads } = await supabase
+            .from('leads')
+            .select('arcadas_vendidas')
+            .in('indicated_by', teamIds)
+            .eq('establishment_code', establishmentCode)
+            .eq('status', 'converted')
+            .neq('id', selectedLeadForConversion.id) // Excluir lead atual
+
+          const totalArcadasEquipeAntes = teamLeads?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
+          const totalArcadasEquipeDepois = totalArcadasEquipeAntes + arcadas
+
+          console.log('📊 ARCADAS DA EQUIPE:')
+          console.log('   - Antes:', totalArcadasEquipeAntes)
+          console.log('   - Depois:', totalArcadasEquipeDepois)
+
+          // Verificar marcos de bônus
+          const marcos = [
+            { arcadas: 35, bonus: settings.manager_bonus_35_arcadas || 0 },
+            { arcadas: 50, bonus: settings.manager_bonus_50_arcadas || 0 },
+            { arcadas: 75, bonus: settings.manager_bonus_75_arcadas || 0 }
+          ]
+
+          for (const marco of marcos) {
+            const marcosAntes = Math.floor(totalArcadasEquipeAntes / marco.arcadas)
+            const marcosDepois = Math.floor(totalArcadasEquipeDepois / marco.arcadas)
+            const novosMarcos = marcosDepois - marcosAntes
+
+            if (novosMarcos > 0) {
+              bonusGerente += novosMarcos * marco.bonus
+              console.log(`🎉 Bônus ${marco.arcadas} arcadas: ${novosMarcos}x R$ ${marco.bonus} = R$ ${novosMarcos * marco.bonus}`)
+            }
+          }
+        }
+
+        const managerTotalAmount = comissaoBaseGerente + bonusGerente
+
+        console.log('💰 RESUMO COMISSÃO GERENTE:')
+        console.log('   - Comissão base:', comissaoBaseGerente)
+        console.log('   - Bônus total:', bonusGerente)
+        console.log('   - Valor total:', managerTotalAmount)
+
+        // ===== STEP 10: CRIAR COMISSÃO DO GERENTE =====
+        if (managerTotalAmount > 0) {
+          const { data: managerCommissionData, error: managerCommissionError } = await supabase
+            .from('commissions')
+            .insert({
+              lead_id: selectedLeadForConversion.id,
+              user_id: hierarchy.manager_id,
+              clinic_id: selectedLeadForConversion.clinic_id,
+              establishment_code: establishmentCode,
+              amount: managerTotalAmount,
+              percentage: 100,
+              type: 'manager',
+              status: 'pending',
+              arcadas_vendidas: arcadas, // 🔥 CORRIGIDO: Campo arcadas
+              valor_por_arcada: managerValuePerArcada, // 🔥 CORRIGIDO: Valor correto do gerente
+              bonus_conquistados: bonusGerente > 0 ? 1 : 0,
+              valor_bonus: bonusGerente
+            })
+            .select('id, amount')
+            .single()
+
+          if (managerCommissionError) {
+            console.error('❌ ERRO AO CRIAR COMISSÃO DO GERENTE:', managerCommissionError)
+            throw managerCommissionError
+          }
+
+          console.log('✅ COMISSÃO DO GERENTE CRIADA:', managerCommissionData)
+        } else {
+          console.log('ℹ️ Gerente não receberá comissão (valor zero)')
+        }
+      } else {
+        console.log('ℹ️ Consultor não possui gerente')
+      }
+
+      // ===== STEP 11: MENSAGENS DE SUCESSO =====
+      console.log('🎉 CONVERSÃO CONCLUÍDA COM SUCESSO!')
+
+      toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
+
+      if (bonusConsultorGanhos > 0) {
+        toast.success(`🎉 Consultor ganhou ${bonusConsultorGanhos} bônus de R$ ${(valorBonusConsultor / bonusConsultorGanhos).toFixed(2)}!`, {
+          duration: 6000
+        })
+      }
+
+      setShowArcadasModal(false)
+      setSelectedLeadForConversion(null)
+      fetchLeads()
+
+    } catch (error: any) {
+      console.error('❌ ERRO DURANTE CONVERSÃO:', error)
+      toast.error(`Erro ao converter lead: ${error.message}`)
+    } finally {
+      setUpdatingStatus(null)
     }
-
-    // ===== PROSSEGUIR COM CRIAÇÃO NOVA =====
-    console.log('📝 CRIANDO NOVA CONVERSÃO...')
-
-    // Atualizar o lead primeiro
-    const { error: leadError } = await supabase
-      .from('leads')
-      .update({
-        status: 'converted',
-        arcadas_vendidas: arcadas,
-        establishment_code: establishmentCode,
-        converted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', selectedLeadForConversion.id)
-
-    if (leadError) {
-      console.error('❌ Erro ao atualizar lead:', leadError)
-      throw leadError
-    }
-
-    console.log('✅ LEAD ATUALIZADO COM SUCESSO')
-
-    // Calcular comissão do consultor
-    const valorBaseConsultor = arcadas * consultantValuePerArcada
-    
-    console.log('💰 CRIANDO COMISSÃO DO CONSULTOR:')
-    console.log('   - Usuário ID:', selectedLeadForConversion.indicated_by)
-    console.log('   - Valor calculado:', valorBaseConsultor)
-    console.log('   - Valor por arcada:', consultantValuePerArcada)
-    console.log('   - Arcadas:', arcadas)
-    console.log('   - Establishment:', establishmentCode)
-
-    // 🔥 PONTO CRÍTICO: CRIAR A COMISSÃO COM O VALOR CORRETO
-    const { data: consultantCommissionData, error: consultantCommissionError } = await supabase
-      .from('commissions')
-      .insert({
-        lead_id: selectedLeadForConversion.id,
-        user_id: selectedLeadForConversion.indicated_by,
-        clinic_id: selectedLeadForConversion.clinic_id,
-        establishment_code: establishmentCode,
-        amount: valorBaseConsultor, // 🔥 VALOR CRÍTICO
-        percentage: 100,
-        type: 'consultant',
-        status: 'pending',
-        arcadas_vendidas: arcadas,
-        valor_por_arcada: consultantValuePerArcada, // 🔥 VALOR CRÍTICO
-        bonus_conquistados: 0,
-        valor_bonus: 0
-      })
-      .select('id, amount')
-      .single()
-
-    if (consultantCommissionError) {
-      console.error('❌ ERRO AO CRIAR COMISSÃO DO CONSULTOR:', consultantCommissionError)
-      throw consultantCommissionError
-    }
-
-    console.log('✅ COMISSÃO DO CONSULTOR CRIADA:', consultantCommissionData)
-    console.log('💰 Valor final da comissão:', consultantCommissionData.amount)
-
-    toast.success(`Lead convertido! Comissão de R$ ${valorBaseConsultor.toLocaleString('pt-BR')} criada!`)
-
-    setShowArcadasModal(false)
-    setSelectedLeadForConversion(null)
-    fetchLeads()
-
-  } catch (error: any) {
-    console.error('❌ ERRO DURANTE CONVERSÃO:', error)
-    toast.error(`Erro ao converter lead: ${error.message}`)
-  } finally {
-    setUpdatingStatus(null)
   }
-}
 
   const updateLeadStatus = async (leadId: string, newStatus: string) => {
     try {
@@ -854,7 +955,7 @@ const handleConfirmConversion = async (arcadas: number) => {
                           </button>
                         )}
 
-                      
+
 
                         <button
                           onClick={() => handleViewLead(lead.id)}
@@ -912,7 +1013,7 @@ const handleConfirmConversion = async (arcadas: number) => {
         </div>
       </motion.div>
 
-     
+
 
       {/* Lead Detail Modal */}
       <LeadDetailModal

@@ -92,27 +92,25 @@ export default function CommissionsPage() {
     }
   }, [profile])
 
-  // src/app/dashboard/commissions/page.tsx - CORREÇÃO DA FUNÇÃO fetchCommissions
-
   const fetchCommissions = async () => {
-  try {
-    setLoading(true)
+    try {
+      setLoading(true)
 
-    if (!profile) return
+      if (!profile) return
 
-    // Buscar clínica do usuário
-    const { data: userClinic } = await supabase
-      .from('user_clinics')
-      .select('clinic_id')
-      .eq('user_id', profile.id)
-      .single()
+      // Buscar clínica do usuário
+      const { data: userClinic } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile.id)
+        .single()
 
-    if (!userClinic) return
+      if (!userClinic) return
 
-    // ✅ CORREÇÃO: Query especificando qual relacionamento usar
-    let query = supabase
-      .from('commissions')
-      .select(`
+      // Query principal para buscar comissões
+      let query = supabase
+        .from('commissions')
+        .select(`
         *,
         leads!commissions_lead_id_fkey (
           id,
@@ -135,167 +133,126 @@ export default function CommissionsPage() {
           name
         )
       `)
-      .eq('clinic_id', userClinic.clinic_id)
-      .order('created_at', { ascending: false })
+        .eq('clinic_id', userClinic.clinic_id)
+        .order('created_at', { ascending: false })
 
-    // ✅ ALTERNATIVA: Se você quiser ambos os leads (atual e original)
-    /*
-    let query = supabase
-      .from('commissions')
-      .select(`
-        *,
-        lead:leads!commissions_lead_id_fkey (
-          id,
-          full_name,
-          phone,
-          status,
-          arcadas_vendidas,
-          establishment_code,
-          created_at,
-          converted_at
-        ),
-        original_lead:leads!commissions_original_lead_id_fkey (
-          id,
-          full_name,
-          phone,
-          status,
-          arcadas_vendidas,
-          establishment_code,
-          created_at,
-          converted_at
-        ),
-        users!commissions_user_id_fkey (
-          id,
-          full_name,
-          email,
-          role
-        ),
-        establishment_codes!left (
-          code,
-          name
-        )
-      `)
-      .eq('clinic_id', userClinic.clinic_id)
-      .order('created_at', { ascending: false })
-    */
-
-    // Filtros por role (mantidos iguais)
-    if (profile.role === 'consultant') {
-      query = query.eq('user_id', profile.id)
-    } else if (profile.role === 'manager') {
-      const { data: hierarchy } = await supabase
-        .from('hierarchies')
-        .select('consultant_id')
-        .eq('manager_id', profile.id)
-
-      const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-      consultantIds.push(profile.id)
-
-      if (consultantIds.length > 0) {
-        query = query.in('user_id', consultantIds)
-      } else {
+      // Filtros por role
+      if (profile.role === 'consultant') {
         query = query.eq('user_id', profile.id)
+      } else if (profile.role === 'manager') {
+        const { data: hierarchy } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+
+        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id)
+
+        if (consultantIds.length > 0) {
+          query = query.in('user_id', consultantIds)
+        } else {
+          query = query.eq('user_id', profile.id)
+        }
       }
-    }
 
-    const { data, error } = await query
+      const { data, error } = await query
 
-    if (error) {
-      console.error('❌ Erro na query de comissões:', error)
-      throw error
-    }
-
-    console.log('✅ Comissões carregadas:', data?.length || 0)
-
-    // ✅ CORREÇÃO: Processar dados com estrutura corrigida
-    const processedCommissions = (data || []).map(commission => {
-      return {
-        ...commission,
-        // Para a primeira opção (um relacionamento)
-        leads: commission.leads ? {
-          id: commission.leads.id,
-          full_name: commission.leads.full_name || 'Nome não disponível',
-          phone: commission.leads.phone || 'Telefone não informado',
-          status: commission.leads.status || 'unknown',
-          arcadas_vendidas: commission.leads.arcadas_vendidas || 1,
-          establishment_code: commission.leads.establishment_code,
-          created_at: commission.leads.created_at,
-          converted_at: commission.leads.converted_at
-        } : null,
-        
-        // ✅ Para a segunda opção (dois relacionamentos), use isso:
-        /*
-        leads: commission.lead ? {
-          id: commission.lead.id,
-          full_name: commission.lead.full_name || 'Nome não disponível',
-          phone: commission.lead.phone || 'Telefone não informado',
-          status: commission.lead.status || 'unknown',
-          arcadas_vendidas: commission.lead.arcadas_vendidas || 1,
-          establishment_code: commission.lead.establishment_code,
-          created_at: commission.lead.created_at,
-          converted_at: commission.lead.converted_at
-        } : null,
-        original_lead: commission.original_lead ? {
-          id: commission.original_lead.id,
-          full_name: commission.original_lead.full_name || 'Nome não disponível',
-          phone: commission.original_lead.phone || 'Telefone não informado',
-          status: commission.original_lead.status || 'unknown',
-          arcadas_vendidas: commission.original_lead.arcadas_vendidas || 1,
-          establishment_code: commission.original_lead.establishment_code,
-          created_at: commission.original_lead.created_at,
-          converted_at: commission.original_lead.converted_at
-        } : null,
-        */
-        
-        users: commission.users ? {
-          id: commission.users.id,
-          full_name: commission.users.full_name || 'Usuário não identificado',
-          email: commission.users.email || 'Email não disponível',
-          role: commission.users.role || 'consultant'
-        } : null,
-        establishment: commission.establishment_codes ? {
-          code: commission.establishment_codes.code,
-          name: commission.establishment_codes.name || commission.establishment_codes.code
-        } : null
+      if (error) {
+        console.error('❌ Erro na query de comissões:', error)
+        throw error
       }
-    })
 
-    setCommissions(processedCommissions)
+      console.log('✅ Comissões carregadas:', data?.length || 0)
 
-      // ✅ CORREÇÃO: Calcular estatísticas com dados processados
-      const totalCommissions = processedCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
-      const paidCommissions = processedCommissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.amount || 0), 0)
-      const pendingCommissions = processedCommissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.amount || 0), 0)
-      const cancelledCommissions = processedCommissions.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + (c.amount || 0), 0)
+      // Processar dados com estrutura corrigida
+      const processedCommissions = (data || []).map(commission => {
+        // 🔥 CORRIGIDO: Garantir que arcadas_vendidas vem da comissão, não do lead
+        const arcadasVendidas = commission.arcadas_vendidas ||
+          commission.leads?.arcadas_vendidas ||
+          1
+
+        return {
+          ...commission,
+          // Dados do lead
+          leads: commission.leads ? {
+            id: commission.leads.id,
+            full_name: commission.leads.full_name || 'Nome não disponível',
+            phone: commission.leads.phone || 'Telefone não informado',
+            status: commission.leads.status || 'unknown',
+            arcadas_vendidas: arcadasVendidas, // 🔥 CORRIGIDO: Usar valor da comissão
+            establishment_code: commission.leads.establishment_code,
+            created_at: commission.leads.created_at,
+            converted_at: commission.leads.converted_at
+          } : null,
+
+          // Dados do usuário
+          users: commission.users ? {
+            id: commission.users.id,
+            full_name: commission.users.full_name || 'Usuário não identificado',
+            email: commission.users.email || 'Email não disponível',
+            role: commission.users.role || 'consultant'
+          } : null,
+
+          // Dados do estabelecimento
+          establishment: commission.establishment_codes ? {
+            code: commission.establishment_codes.code,
+            name: commission.establishment_codes.name || commission.establishment_codes.code
+          } : null,
+
+          // 🔥 CORRIGIDO: Garantir que arcadas_vendidas está no nível da comissão
+          arcadas_vendidas: arcadasVendidas
+        }
+      })
+
+      // 🔥 NOVO: Filtrar duplicatas por lead_id + user_id + type
+      const uniqueCommissions = processedCommissions.filter((commission, index, array) => {
+        const key = `${commission.lead_id}-${commission.user_id}-${commission.type}`
+        return array.findIndex(c => `${c.lead_id}-${c.user_id}-${c.type}` === key) === index
+      })
+
+      console.log('🔍 Comissões antes da deduplicação:', processedCommissions.length)
+      console.log('🔍 Comissões após deduplicação:', uniqueCommissions.length)
+
+      if (processedCommissions.length !== uniqueCommissions.length) {
+        console.warn('⚠️ Encontradas comissões duplicadas! Mostrando apenas únicas.')
+      }
+
+      setCommissions(uniqueCommissions)
+
+      // Calcular estatísticas com dados processados
+      const totalCommissions = uniqueCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+      const paidCommissions = uniqueCommissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.amount || 0), 0)
+      const pendingCommissions = uniqueCommissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.amount || 0), 0)
+      const cancelledCommissions = uniqueCommissions.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + (c.amount || 0), 0)
 
       // Calcular comissões deste mês
       const thisMonth = new Date()
       const firstDayOfMonth = new Date(thisMonth.getFullYear(), thisMonth.getMonth(), 1)
-      const monthlyCommissions = processedCommissions.filter(c =>
+      const monthlyCommissions = uniqueCommissions.filter(c =>
         new Date(c.created_at) >= firstDayOfMonth && c.status === 'paid'
       ).reduce((sum, c) => sum + (c.amount || 0), 0)
 
       // Calcular total de arcadas
-      const totalArcadas = processedCommissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)
+      const totalArcadas = uniqueCommissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)
 
       // Calcular taxa de conversão baseada nos leads vinculados
-      const leadsComComissao = processedCommissions.filter(c => c.leads).length
-      const leadsConvertidos = processedCommissions.filter(c => c.leads?.status === 'converted').length
+      const leadsComComissao = uniqueCommissions.filter(c => c.leads).length
+      const leadsConvertidos = uniqueCommissions.filter(c => c.leads?.status === 'converted').length
       const conversionRate = leadsComComissao > 0 ? (leadsConvertidos / leadsComComissao) * 100 : 0
 
       setStats({
-        total: processedCommissions.length,
+        total: uniqueCommissions.length,
         totalPending: pendingCommissions,
         totalPaid: paidCommissions,
         totalCancelled: cancelledCommissions,
-        averageCommission: processedCommissions.length > 0 ? totalCommissions / processedCommissions.length : 0,
+        averageCommission: uniqueCommissions.length > 0 ? totalCommissions / uniqueCommissions.length : 0,
         monthlyEarnings: monthlyCommissions,
         conversionRate: conversionRate,
         totalArcadas: totalArcadas
       })
 
       console.log('✅ Stats calculadas:', {
-        total: processedCommissions.length,
+        total: uniqueCommissions.length,
         totalPaid: paidCommissions,
         totalPending: pendingCommissions,
         totalArcadas: totalArcadas
@@ -777,15 +734,21 @@ export default function CommissionsPage() {
                     <td>
                       <div className="text-center">
                         <div className="text-lg font-bold text-primary-600">
-                          {commission.leads?.arcadas_vendidas || commission.arcadas_vendidas || 1}
+                          {commission.arcadas_vendidas || 1}
                         </div>
                         <div className="text-xs text-secondary-500">
-                          {(commission.leads?.arcadas_vendidas || commission.arcadas_vendidas || 1) === 1 ? 'Superior OU Inferior' : 'Superior E Inferior'}
+                          {(commission.arcadas_vendidas || 1) === 1 ? 'Superior OU Inferior' : 'Superior E Inferior'}
                         </div>
-                        {/* CORREÇÃO: Mostrar estabelecimento se disponível */}
+                        {/* Mostrar estabelecimento se disponível */}
                         {commission.establishment?.name && (
                           <div className="text-xs text-blue-600 mt-1">
                             📍 {commission.establishment.name}
+                          </div>
+                        )}
+                        {/* 🔥 NOVO: Debug info para verificar dados */}
+                        {process.env.NODE_ENV === 'development' && (
+                          <div className="text-xs text-gray-400 mt-1">
+                            DB: {commission.arcadas_vendidas} | Lead: {commission.leads?.arcadas_vendidas}
                           </div>
                         )}
                       </div>
@@ -797,19 +760,30 @@ export default function CommissionsPage() {
                         <div className="text-lg font-bold text-success-600">
                           R$ {(commission.amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </div>
-                        {/* CORREÇÃO: Mostrar breakdown do valor */}
+                        {/* Breakdown do valor */}
                         <div className="text-xs text-secondary-500 space-y-1">
-                          {commission.valor_por_arcada && (
-                            <div>Base: R$ {commission.valor_por_arcada.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/arcada</div>
+                          {commission.valor_por_arcada && commission.arcadas_vendidas && (
+                            <div>
+                              Base: R$ {commission.valor_por_arcada.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              × {commission.arcadas_vendidas} arcada{commission.arcadas_vendidas > 1 ? 's' : ''}
+                            </div>
                           )}
                           {commission.valor_bonus && commission.valor_bonus > 0 && (
                             <div className="text-warning-600">
                               Bônus: R$ {commission.valor_bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              {commission.bonus_conquistados && ` (${commission.bonus_conquistados}x)`}
+                              {commission.bonus_conquistados && commission.bonus_conquistados > 0 &&
+                                ` (${commission.bonus_conquistados}x)`
+                              }
+                            </div>
+                          )}
+                          {/* 🔥 NOVO: Mostrar cálculo detalhado para debug */}
+                          {process.env.NODE_ENV === 'development' && (
+                            <div className="text-xs text-gray-400">
+                              Cálculo: {commission.valor_por_arcada || 0} × {commission.arcadas_vendidas || 1} + {commission.valor_bonus || 0} = {commission.amount}
                             </div>
                           )}
                         </div>
-                        {/* CORREÇÃO: Indicar se é comissão de indicação */}
+                        {/* Indicar se é comissão de indicação */}
                         {commission.is_indication_commission && (
                           <div className="text-xs text-purple-600 font-medium mt-1">
                             🔗 Comissão de Indicação
