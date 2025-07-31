@@ -1184,8 +1184,7 @@ export default function DashboardPage() {
       {/* Top Performers & Additional Stats */}
       {(profile?.role === 'clinic_admin' || profile?.role === 'manager') && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Top Performers */}
-          <motion.div
+          {/* <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6 }}
@@ -1237,7 +1236,7 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
-          </motion.div>
+          </motion.div> */}
 
           {/* Additional Stats */}
           <motion.div
