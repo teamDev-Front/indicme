@@ -923,7 +923,7 @@ export default function LeadsPage() {
                     <td>
                       <div className="flex items-center space-x-2">
                         {/* 🔥 NOVO: Botão de conversão rápida para consultores */}
-                        {profile?.role === 'consultant' && lead.status !== 'converted' && lead.status !== 'lost' && (
+                        {profile?.role === 'clinic_admin' && lead.status !== 'converted' && lead.status !== 'lost' && (
                           <button
                             onClick={() => handleQuickConvert(lead)}
                             className="btn btn-success btn-sm"
