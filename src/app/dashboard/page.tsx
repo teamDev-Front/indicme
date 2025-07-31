@@ -30,6 +30,8 @@ interface DashboardStats {
   conversionRate: number
   totalArcadas: number
   totalRevenue: number
+  consultantRevenue: number
+  managerRevenue: number
   totalCommissions: number
   paidCommissions: number
   pendingCommissions: number
@@ -73,6 +75,8 @@ export default function DashboardPage() {
     conversionRate: 0,
     totalArcadas: 0,
     totalRevenue: 0,
+    consultantRevenue: 0,
+    managerRevenue: 0,
     totalCommissions: 0,
     paidCommissions: 0,
     pendingCommissions: 0,
@@ -128,7 +132,122 @@ export default function DashboardPage() {
     }
   }, [profile?.id, fetchDashboardData])
 
-  // CORREÇÃO 3: Função para admin baseada em estabelecimentos melhorada
+  const calculateRealRevenue = async (leads: any[], supabase: any) => {
+    try {
+      // Agrupar leads convertidos por establishment_code
+      const leadsByEstablishment = leads
+        .filter(l => l.status === 'converted' && l.establishment_code)
+        .reduce((acc, lead) => {
+          const code = lead.establishment_code
+          if (!acc[code]) {
+            acc[code] = []
+          }
+          acc[code].push(lead)
+          return acc
+        }, {} as Record<string, any[]>)
+
+      let totalConsultantRevenue = 0
+      let totalManagerRevenue = 0
+      const establishmentCodes = Object.keys(leadsByEstablishment)
+
+      console.log('🏢 Calculando receita COMPLETA para estabelecimentos:', establishmentCodes)
+
+      // Buscar configurações de cada estabelecimento
+      for (const establishmentCode of establishmentCodes) {
+        try {
+          // 🔥 NOVO: Buscar AMBAS as configurações
+          const { data: settings, error } = await supabase
+            .from('establishment_commissions')
+            .select('consultant_value_per_arcada, manager_value_per_arcada')
+            .eq('establishment_code', establishmentCode)
+            .single()
+
+          if (error && error.code !== 'PGRST116') {
+            console.warn(`⚠️ Erro ao buscar configuração do estabelecimento ${establishmentCode}:`, error)
+            continue
+          }
+
+          const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
+          const managerValuePerArcada = settings?.manager_value_per_arcada || consultantValuePerArcada || 750
+
+          if (consultantValuePerArcada === 0 && managerValuePerArcada === 0) {
+            console.warn(`⚠️ Configuração não encontrada para estabelecimento: ${establishmentCode}`)
+            continue
+          }
+
+          // Calcular arcadas deste estabelecimento
+          const arcadasEstabelecimento = leadsByEstablishment[establishmentCode]
+            .reduce((sum: any, lead: any) => sum + (lead.arcadas_vendidas || 1), 0)
+
+          // 🔥 NOVO: Calcular receita separada por tipo
+          const consultantRevenueEst = arcadasEstabelecimento * consultantValuePerArcada
+          const managerRevenueEst = arcadasEstabelecimento * managerValuePerArcada
+
+          totalConsultantRevenue += consultantRevenueEst
+          totalManagerRevenue += managerRevenueEst
+
+          console.log(`💰 ${establishmentCode}: ${arcadasEstabelecimento} arcadas`)
+          console.log(`   - Consultores: R$ ${consultantRevenueEst.toLocaleString('pt-BR')} (R$ ${consultantValuePerArcada}/arcada)`)
+          console.log(`   - Gerentes: R$ ${managerRevenueEst.toLocaleString('pt-BR')} (R$ ${managerValuePerArcada}/arcada)`)
+
+        } catch (estError) {
+          console.error(`❌ Erro ao processar estabelecimento ${establishmentCode}:`, estError)
+        }
+      }
+
+      // Para leads sem establishment_code, usar configuração padrão
+      const leadsWithoutEstablishment = leads.filter(l =>
+        l.status === 'converted' && !l.establishment_code
+      )
+
+      if (leadsWithoutEstablishment.length > 0) {
+        console.warn(`⚠️ ${leadsWithoutEstablishment.length} leads convertidos sem establishment_code`)
+
+        const { data: fallbackSettings } = await supabase
+          .from('establishment_commissions')
+          .select('consultant_value_per_arcada, manager_value_per_arcada')
+          .limit(1)
+          .single()
+
+        if (fallbackSettings) {
+          const arcadasSemEstab = leadsWithoutEstablishment
+            .reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0)
+
+          const fallbackConsultant = fallbackSettings.consultant_value_per_arcada || 750
+          const fallbackManager = fallbackSettings.manager_value_per_arcada || fallbackConsultant
+
+          totalConsultantRevenue += arcadasSemEstab * fallbackConsultant
+          totalManagerRevenue += arcadasSemEstab * fallbackManager
+
+          console.log(`📝 Fallback: ${arcadasSemEstab} arcadas × R$ ${fallbackConsultant + fallbackManager}`)
+        }
+      }
+
+      const totalRevenue = totalConsultantRevenue + totalManagerRevenue
+
+      console.log(`✅ RECEITA COMPLETA CALCULADA:`)
+      console.log(`   - Consultores: R$ ${totalConsultantRevenue.toLocaleString('pt-BR')}`)
+      console.log(`   - Gerentes: R$ ${totalManagerRevenue.toLocaleString('pt-BR')}`)
+      console.log(`   - TOTAL: R$ ${totalRevenue.toLocaleString('pt-BR')}`)
+
+      // 🔥 NOVO: Retornar objeto com breakdown
+      return {
+        total: totalRevenue,
+        consultant: totalConsultantRevenue,
+        manager: totalManagerRevenue
+      }
+
+    } catch (error) {
+      console.error('❌ Erro ao calcular receita completa:', error)
+      return {
+        total: 0,
+        consultant: 0,
+        manager: 0
+      }
+    }
+  }
+
+  // 🔥 FUNÇÃO 1: fetchClinicAdminData CORRIGIDA
   const fetchClinicAdminData = useCallback(async () => {
     try {
       console.log('🔍 Buscando dados para clinic admin...')
@@ -152,18 +271,18 @@ export default function DashboardPage() {
       const { data: allLeads, error: leadsError } = await supabase
         .from('leads')
         .select(`
-          id,
-          status,
-          arcadas_vendidas,
-          created_at,
-          establishment_code,
-          indicated_by,
-          converted_at,
-          users!leads_indicated_by_fkey (
-            full_name,
-            role
-          )
-        `)
+        id,
+        status,
+        arcadas_vendidas,
+        created_at,
+        establishment_code,
+        indicated_by,
+        converted_at,
+        users!leads_indicated_by_fkey (
+          full_name,
+          role
+        )
+      `)
         .eq('clinic_id', clinicId)
 
       if (leadsError) {
@@ -187,37 +306,8 @@ export default function DashboardPage() {
         ?.filter(l => l.status === 'converted')
         ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
 
-      // 5. Buscar estabelecimentos e calcular receita
-      const { data: establishments } = await supabase
-        .from('establishment_codes')
-        .select('code, name')
-        .eq('is_active', true)
-
-      let totalRevenue = 0
-      if (establishments) {
-        for (const establishment of establishments) {
-          // Buscar configuração do estabelecimento
-          const { data: settings } = await supabase
-            .from('establishment_commissions')
-            .select('consultant_value_per_arcada')
-            .eq('establishment_code', establishment.code)
-            .single()
-
-          const valorPorArcada = settings?.consultant_value_per_arcada || 750
-
-          // Calcular arcadas deste estabelecimento
-          const arcadasEstabelecimento = allLeads
-            ?.filter(l =>
-              l.establishment_code === establishment.code &&
-              l.status === 'converted'
-            )
-            ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
-
-          totalRevenue += arcadasEstabelecimento * valorPorArcada
-        }
-      }
-
-      console.log('💰 Receita total calculada:', totalRevenue)
+      // 5. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
+      const revenueData = await calculateRealRevenue(allLeads || [], supabase)
 
       // 6. Buscar comissões da clínica
       const { data: commissions, error: commissionsError } = await supabase
@@ -241,11 +331,11 @@ export default function DashboardPage() {
       const { data: users, error: usersError } = await supabase
         .from('users')
         .select(`
-          id,
-          role,
-          status,
-          user_clinics!inner(clinic_id)
-        `)
+        id,
+        role,
+        status,
+        user_clinics!inner(clinic_id)
+      `)
         .eq('user_clinics.clinic_id', clinicId)
         .eq('status', 'active')
 
@@ -271,14 +361,22 @@ export default function DashboardPage() {
         new Date(l.converted_at) >= startOfMonth
       ).length || 0
 
-      // 9. Atualizar estado
+      // 9. Buscar estabelecimentos
+      const { data: establishments } = await supabase
+        .from('establishment_codes')
+        .select('code, name')
+        .eq('is_active', true)
+
+      // 10. 🔥 ATUALIZAR ESTADO COM RECEITA COMPLETA
       setStats({
         totalLeads,
         convertedLeads,
         pendingLeads,
         conversionRate,
         totalArcadas,
-        totalRevenue,
+        totalRevenue: revenueData.total,         // 🔥 NOVO: Total completo
+        consultantRevenue: revenueData.consultant, // 🔥 NOVO: Breakdown consultor
+        managerRevenue: revenueData.manager,       // 🔥 NOVO: Breakdown gerente
         totalCommissions,
         paidCommissions,
         pendingCommissions,
@@ -289,7 +387,7 @@ export default function DashboardPage() {
         establishmentCount: establishments?.length || 0,
       })
 
-      // 10. Buscar atividades recentes e top performers
+      // 11. Buscar atividades recentes e top performers
       await Promise.all([
         fetchRecentActivity(clinicId),
         fetchTopPerformers(clinicId)
@@ -303,97 +401,7 @@ export default function DashboardPage() {
     }
   }, [profile?.id])
 
-
-  const calculateRealRevenue = async (leads: any[], supabase: any) => {
-    try {
-      // Agrupar leads convertidos por establishment_code
-      const leadsByEstablishment = leads
-        .filter(l => l.status === 'converted' && l.establishment_code)
-        .reduce((acc, lead) => {
-          const code = lead.establishment_code
-          if (!acc[code]) {
-            acc[code] = []
-          }
-          acc[code].push(lead)
-          return acc
-        }, {} as Record<string, any[]>)
-
-      let totalRevenue = 0
-      const establishmentCodes = Object.keys(leadsByEstablishment)
-
-      console.log('🏢 Calculando receita para estabelecimentos:', establishmentCodes)
-
-      // Buscar configurações de cada estabelecimento
-      for (const establishmentCode of establishmentCodes) {
-        try {
-          const { data: settings, error } = await supabase
-            .from('establishment_commissions')
-            .select('consultant_value_per_arcada')
-            .eq('establishment_code', establishmentCode)
-            .single()
-
-          if (error && error.code !== 'PGRST116') {
-            console.warn(`⚠️ Erro ao buscar configuração do estabelecimento ${establishmentCode}:`, error)
-            continue
-          }
-
-          const valorPorArcada = settings?.consultant_value_per_arcada || 0
-
-          if (valorPorArcada === 0) {
-            console.warn(`⚠️ Configuração não encontrada para estabelecimento: ${establishmentCode}`)
-            continue
-          }
-
-          // Calcular arcadas deste estabelecimento
-          const arcadasEstabelecimento = leadsByEstablishment[establishmentCode]
-            .reduce((sum: any, lead: any) => sum + (lead.arcadas_vendidas || 1), 0)
-
-          const revenueEstabelecimento = arcadasEstabelecimento * valorPorArcada
-          totalRevenue += revenueEstabelecimento
-
-          console.log(`💰 ${establishmentCode}: ${arcadasEstabelecimento} arcadas × R$ ${valorPorArcada} = R$ ${revenueEstabelecimento.toLocaleString('pt-BR')}`)
-
-        } catch (estError) {
-          console.error(`❌ Erro ao processar estabelecimento ${establishmentCode}:`, estError)
-        }
-      }
-
-      // Para leads sem establishment_code, usar configuração padrão (último recurso)
-      const leadsWithoutEstablishment = leads.filter(l =>
-        l.status === 'converted' && !l.establishment_code
-      )
-
-      if (leadsWithoutEstablishment.length > 0) {
-        console.warn(`⚠️ ${leadsWithoutEstablishment.length} leads convertidos sem establishment_code`)
-
-        // Buscar primeira configuração disponível como fallback
-        const { data: fallbackSettings } = await supabase
-          .from('establishment_commissions')
-          .select('consultant_value_per_arcada')
-          .limit(1)
-          .single()
-
-        if (fallbackSettings?.consultant_value_per_arcada) {
-          const arcadasSemEstab = leadsWithoutEstablishment
-            .reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0)
-
-          totalRevenue += arcadasSemEstab * fallbackSettings.consultant_value_per_arcada
-          console.log(`📝 Fallback: ${arcadasSemEstab} arcadas × R$ ${fallbackSettings.consultant_value_per_arcada}`)
-        }
-      }
-
-      console.log(`✅ Receita total calculada: R$ ${totalRevenue.toLocaleString('pt-BR')}`)
-      return totalRevenue
-
-    } catch (error) {
-      console.error('❌ Erro ao calcular receita real:', error)
-      return 0
-    }
-  }
-
-  // ==========================================
-  // CORREÇÃO: fetchManagerData
-  // ==========================================
+  // 🔥 FUNÇÃO 2: fetchManagerData CORRIGIDA
   const fetchManagerData = useCallback(async () => {
     try {
       console.log('🔍 Buscando dados para manager...')
@@ -433,18 +441,18 @@ export default function DashboardPage() {
         const { data: leads, error: leadsError } = await supabase
           .from('leads')
           .select(`
-          id,
-          status,
-          arcadas_vendidas,
-          created_at,
-          establishment_code,
-          indicated_by,
-          converted_at,
-          users!leads_indicated_by_fkey (
-            full_name,
-            role
-          )
-        `)
+        id,
+        status,
+        arcadas_vendidas,
+        created_at,
+        establishment_code,
+        indicated_by,
+        converted_at,
+        users!leads_indicated_by_fkey (
+          full_name,
+          role
+        )
+      `)
           .in('indicated_by', consultantIds)
 
         if (leadsError) {
@@ -468,8 +476,8 @@ export default function DashboardPage() {
         .filter(l => l.status === 'converted')
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
-      // 5. 🔥 CALCULAR RECEITA REAL (SEM MOCKAR!)
-      const totalRevenue = await calculateRealRevenue(teamLeads, supabase)
+      // 5. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
+      const revenueData = await calculateRealRevenue(teamLeads, supabase)
 
       // 6. Buscar comissões da equipe
       const { data: teamCommissions } = await supabase
@@ -507,14 +515,16 @@ export default function DashboardPage() {
           .map(l => l.establishment_code)
       )
 
-      // 9. Atualizar estado
+      // 9. 🔥 ATUALIZAR ESTADO COM RECEITA COMPLETA
       setStats({
         totalLeads,
         convertedLeads,
         pendingLeads,
         conversionRate,
         totalArcadas,
-        totalRevenue, // 🔥 VALOR REAL, NÃO MOCADO!
+        totalRevenue: revenueData.total,         // 🔥 NOVO: Total completo
+        consultantRevenue: revenueData.consultant, // 🔥 NOVO: Breakdown consultor
+        managerRevenue: revenueData.manager,       // 🔥 NOVO: Breakdown gerente
         totalCommissions,
         paidCommissions,
         pendingCommissions,
@@ -529,7 +539,7 @@ export default function DashboardPage() {
       await fetchRecentActivity(userClinic.clinic_id, consultantIds)
 
       console.log('✅ Dados do manager carregados com sucesso')
-      console.log('💰 Receita calculada (real):', totalRevenue)
+      console.log('💰 Receita calculada (completa):', revenueData.total)
 
     } catch (error) {
       console.error('❌ Erro ao buscar dados do manager:', error)
@@ -537,9 +547,7 @@ export default function DashboardPage() {
     }
   }, [profile?.id])
 
-  // ==========================================
-  // CORREÇÃO: fetchConsultantData  
-  // ==========================================
+  // 🔥 FUNÇÃO 3: fetchConsultantData CORRIGIDA
   const fetchConsultantData = useCallback(async () => {
     try {
       console.log('🔍 Buscando dados para consultant...')
@@ -548,13 +556,13 @@ export default function DashboardPage() {
       const { data: consultantLeads, error: leadsError } = await supabase
         .from('leads')
         .select(`
-        id,
-        status,
-        arcadas_vendidas,
-        created_at,
-        establishment_code,
-        converted_at
-      `)
+      id,
+      status,
+      arcadas_vendidas,
+      created_at,
+      establishment_code,
+      converted_at
+    `)
         .eq('indicated_by', profile?.id)
 
       if (leadsError) {
@@ -576,8 +584,8 @@ export default function DashboardPage() {
         .filter(l => l.status === 'converted')
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
-      // 3. 🔥 CALCULAR RECEITA REAL (SEM MOCKAR!)
-      const totalRevenue = await calculateRealRevenue(leads, supabase)
+      // 3. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
+      const revenueData = await calculateRealRevenue(leads, supabase)
 
       // 4. Buscar comissões do consultor
       const { data: consultantCommissions } = await supabase
@@ -615,14 +623,16 @@ export default function DashboardPage() {
           .map(l => l.establishment_code)
       )
 
-      // 7. Atualizar estado
+      // 7. 🔥 ATUALIZAR ESTADO COM RECEITA COMPLETA
       setStats({
         totalLeads,
         convertedLeads,
         pendingLeads,
         conversionRate,
         totalArcadas,
-        totalRevenue, // 🔥 VALOR REAL, NÃO MOCADO!
+        totalRevenue: revenueData.total,         // 🔥 NOVO: Total completo
+        consultantRevenue: revenueData.consultant, // 🔥 NOVO: Breakdown consultor
+        managerRevenue: revenueData.manager,       // 🔥 NOVO: Breakdown gerente
         totalCommissions,
         paidCommissions,
         pendingCommissions,
@@ -634,7 +644,7 @@ export default function DashboardPage() {
       })
 
       console.log('✅ Dados do consultant carregados com sucesso')
-      console.log('💰 Receita calculada (real):', totalRevenue)
+      console.log('💰 Receita calculada (completa):', revenueData.total)
 
     } catch (error) {
       console.error('❌ Erro ao buscar dados do consultant:', error)
@@ -1047,8 +1057,20 @@ export default function DashboardPage() {
                 <p className="text-2xl font-bold text-secondary-900">
                   R$ {stats.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                 </p>
-                <div className="text-xs text-secondary-500">
-                  Baseado nas arcadas vendidas
+
+                {/* 🔥 NOVO: Breakdown detalhado */}
+                <div className="text-xs text-secondary-500 space-y-0.5 mt-1">
+                  <div className="flex justify-between">
+                    <span>Consultores:</span>
+                    <span className="font-medium">R$ {stats.consultantRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Gerentes:</span>
+                    <span className="font-medium">R$ {stats.managerRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                  </div>
+                  <div className="text-xs text-secondary-400 mt-1">
+                    Baseado nas arcadas convertidas
+                  </div>
                 </div>
               </div>
             </div>
