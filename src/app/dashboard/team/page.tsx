@@ -1,4 +1,4 @@
-// src/app/dashboard/team/page.tsx - CORREÇÃO DO MODAL DE ADICIONAR À EQUIPE
+// src/app/dashboard/team/page.tsx - CORREÇÃO COMPLETA COM MODAL DE DETALHES
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -28,6 +28,7 @@ import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import Link from 'next/link'
+import ConsultantDetailModal from '@/components/consultants/ConsultantDetailModal' // 🔥 IMPORTAR COMPONENTE
 
 // Interfaces existentes (mantidas as mesmas)
 interface TeamMember {
@@ -66,7 +67,6 @@ interface TeamStats {
     totalPaidCommissions: number
 }
 
-
 export default function TeamPage() {
     const { profile } = useAuth()
     const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
@@ -87,13 +87,15 @@ export default function TeamPage() {
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
     const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null)
 
-    // NOVO ESTADO PARA CONTROLAR O TIPO DE MODAL
+    // Estados para modais
     const [isAddModalOpen, setIsAddModalOpen] = useState(false)
-
     const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false)
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false) // 🔥 NOVO
+    const [selectedConsultantId, setSelectedConsultantId] = useState<string | null>(null) // 🔥 NOVO
+
     const [submitting, setSubmitting] = useState(false)
 
-    // NOVO ESTADO PARA FORMULÁRIO DE CRIAÇÃO
+    // Estado para formulário de criação
     const [newConsultantForm, setNewConsultantForm] = useState({
         full_name: '',
         email: '',
@@ -110,9 +112,7 @@ export default function TeamPage() {
         }
     }, [profile])
 
-
-
-    // Funções existentes mantidas (fetchManagerEstablishments, fetchTeamData, fetchAvailableConsultants)
+    // Todas as funções existentes mantidas (fetchManagerEstablishments, fetchTeamData, etc.)
     const fetchManagerEstablishments = async () => {
         try {
             const { data: userEstablishments, error } = await supabase
@@ -148,19 +148,19 @@ export default function TeamPage() {
             const { data: hierarchyData, error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .select(`
-        created_at,
-        consultant_id,
-        users!hierarchies_consultant_id_fkey (
-          id,
-          email,
-          full_name,
-          phone,
-          role,
-          status,
-          created_at,
-          updated_at
-        )
-      `)
+                    created_at,
+                    consultant_id,
+                    users!hierarchies_consultant_id_fkey (
+                        id,
+                        email,
+                        full_name,
+                        phone,
+                        role,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                `)
                 .eq('manager_id', profile.id)
 
             if (hierarchyError) throw hierarchyError
@@ -194,7 +194,7 @@ export default function TeamPage() {
                         .select('status, created_at, arcadas_vendidas')
                         .eq('indicated_by', memberData.id)
 
-                    // ✅ CORREÇÃO: Buscar APENAS comissões do consultor específico
+                    // Buscar APENAS comissões do consultor específico
                     const { data: commissionsData } = await supabase
                         .from('commissions')
                         .select('amount, status, created_at, type')
@@ -206,7 +206,7 @@ export default function TeamPage() {
                     const lostLeads = leadsData?.filter(l => l.status === 'lost').length || 0
                     const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
 
-                    // ✅ CORREÇÃO: Somar TODAS as comissões do consultor (não filtrar por tipo)
+                    // Somar TODAS as comissões do consultor
                     const totalCommissions = commissionsData?.reduce((sum, c) => sum + c.amount, 0) || 0
                     const paidCommissions = commissionsData?.filter(c => c.status === 'paid')
                         .reduce((sum, c) => sum + c.amount, 0) || 0
@@ -246,7 +246,7 @@ export default function TeamPage() {
             const validMembers = teamMembersWithStats.filter(Boolean) as TeamMember[]
             setTeamMembers(validMembers)
 
-            // ✅ CORREÇÃO: Calcular stats da equipe corretamente
+            // Calcular stats da equipe
             const stats: TeamStats = {
                 totalMembers: validMembers.length,
                 activeMembers: validMembers.filter(m => m.status === 'active').length,
@@ -268,121 +268,6 @@ export default function TeamPage() {
         }
     }
 
-    const fetchAvailableConsultants = async () => {
-        try {
-
-
-            const { data: establishmentCodes, error: codesError } = await supabase
-                .from('establishment_codes')
-                .select('code')
-                .in('name', managerEstablishments)
-
-            if (codesError) throw codesError
-
-            const codes = establishmentCodes?.map(ec => ec.code) || []
-
-
-            const { data: consultantsInEstablishments, error: consultantsError } = await supabase
-                .from('user_establishments')
-                .select(`
-                user_id,
-                establishment_code,
-                users!inner (
-                    id,
-                    full_name,
-                    email,
-                    role,
-                    status
-                ),
-                establishment_codes!user_establishments_establishment_code_fkey (
-                    name
-                )
-            `)
-                .in('establishment_code', codes)
-                .eq('status', 'active')
-                .eq('users.role', 'consultant')
-                .eq('users.status', 'active')
-
-            if (consultantsError) throw consultantsError
-
-            const { data: currentTeamData, error: teamError } = await supabase
-                .from('hierarchies')
-                .select('consultant_id')
-                .eq('manager_id', profile?.id)
-
-            if (teamError) throw teamError
-
-            const currentTeamIds = currentTeamData?.map(h => h.consultant_id) || []
-
-            const consultantsMap = new Map()
-
-            consultantsInEstablishments?.forEach(item => {
-                const userId = item.user_id
-
-                const userData = Array.isArray(item.users) ? item.users[0] : item.users
-                if (!userData) return
-
-                const establishmentData = Array.isArray(item.establishment_codes)
-                    ? item.establishment_codes[0]
-                    : item.establishment_codes
-                const establishmentName = establishmentData?.name || 'Estabelecimento não identificado'
-
-                if (!managerEstablishments.includes(establishmentName)) {
-                    return
-                }
-
-                if (!consultantsMap.has(userId)) {
-                    consultantsMap.set(userId, {
-                        id: userId,
-                        full_name: userData.full_name,
-                        email: userData.email,
-                        establishment_names: [],
-                        isInCurrentTeam: currentTeamIds.includes(userId)
-                    })
-                }
-
-                const consultant = consultantsMap.get(userId)
-                if (!consultant.establishment_names.includes(establishmentName)) {
-                    consultant.establishment_names.push(establishmentName)
-                }
-            })
-
-            const allConsultants = Array.from(consultantsMap.values())
-            const availableConsultantsList = allConsultants.filter(c => !c.isInCurrentTeam)
-
-            if (availableConsultantsList.length > 0) {
-                const { data: otherManagers, error: managersError } = await supabase
-                    .from('hierarchies')
-                    .select(`
-                consultant_id,
-                users!hierarchies_manager_id_fkey (
-                    full_name
-                )
-            `)
-                    .in('consultant_id', availableConsultantsList.map(c => c.id))
-                    .neq('manager_id', profile?.id)
-
-                if (!managersError && otherManagers) {
-                    otherManagers.forEach(om => {
-                        const consultant = availableConsultantsList.find(c => c.id === om.consultant_id)
-                        if (consultant) {
-                            const managerData = Array.isArray(om.users) ? om.users[0] : om.users
-                            consultant.current_manager = managerData?.full_name || 'Outro gerente'
-                        }
-                    })
-                }
-            }
-
-
-        } catch (error: any) {
-            console.error('❌ Erro ao buscar consultores disponíveis:', error)
-            toast.error('Erro ao buscar consultores disponíveis')
-
-        }
-    }
-
-    // src/app/dashboard/team/page.tsx - CORREÇÃO DA FUNÇÃO handleCreateNewConsultant
-
     const handleCreateNewConsultant = async () => {
         if (!profile) {
             toast.error('Usuário não autenticado')
@@ -397,12 +282,11 @@ export default function TeamPage() {
         try {
             setSubmitting(true)
 
-            // 1. CORREÇÃO: Buscar clínica de forma mais robusta
+            // 1. Buscar clínica
             console.log('🔍 Buscando clínica do gerente:', profile.id)
 
             let clinicId: string | null = null
 
-            // Estratégia 1: Buscar via user_clinics
             const { data: userClinic, error: userClinicError } = await supabase
                 .from('user_clinics')
                 .select('clinic_id, clinics!inner(id, name, status)')
@@ -416,7 +300,6 @@ export default function TeamPage() {
             } else {
                 console.log('⚠️ Não encontrou via user_clinics, buscando outras estratégias...')
 
-                // Estratégia 2: Buscar via estabelecimento do gerente
                 const { data: establishmentData } = await supabase
                     .from('establishment_codes')
                     .select('code')
@@ -424,9 +307,6 @@ export default function TeamPage() {
                     .single()
 
                 if (establishmentData?.code) {
-                    console.log('📍 Buscando outros usuários do estabelecimento:', establishmentData.code)
-
-                    // Buscar usuários do mesmo estabelecimento (consulta simples)
                     const { data: sameEstablishmentUsers } = await supabase
                         .from('user_establishments')
                         .select('user_id')
@@ -435,9 +315,6 @@ export default function TeamPage() {
                         .limit(10)
 
                     if (sameEstablishmentUsers && sameEstablishmentUsers.length > 0) {
-                        console.log(`👥 Encontrados ${sameEstablishmentUsers.length} usuários no estabelecimento`)
-
-                        // Para cada usuário, tentar encontrar sua clínica
                         for (const userEst of sameEstablishmentUsers) {
                             try {
                                 const { data: userClinicData } = await supabase
@@ -447,7 +324,6 @@ export default function TeamPage() {
                                     .single()
 
                                 if (userClinicData?.clinic_id) {
-                                    // Verificar se a clínica está ativa
                                     const { data: clinicData } = await supabase
                                         .from('clinics')
                                         .select('id, status')
@@ -459,7 +335,6 @@ export default function TeamPage() {
                                         clinicId = userClinicData.clinic_id
                                         console.log('✅ Clínica encontrada via estabelecimento:', clinicId)
 
-                                        // Associar o gerente à clínica automaticamente
                                         const { error: autoAssocError } = await supabase
                                             .from('user_clinics')
                                             .upsert({
@@ -470,16 +345,13 @@ export default function TeamPage() {
                                                 ignoreDuplicates: true
                                             })
 
-                                        if (autoAssocError) {
-                                            console.warn('Aviso ao associar gerente à clínica:', autoAssocError)
-                                        } else {
+                                        if (!autoAssocError) {
                                             console.log('✅ Gerente associado automaticamente à clínica')
                                         }
-                                        break // Parar no primeiro sucesso
+                                        break
                                     }
                                 }
                             } catch (error) {
-                                // Continue para o próximo usuário se este der erro
                                 console.log(`⚠️ Erro ao verificar usuário ${userEst.user_id}:`, error)
                                 continue
                             }
@@ -487,10 +359,7 @@ export default function TeamPage() {
                     }
                 }
 
-                // Estratégia 3: Se ainda não encontrou, buscar primeira clínica ativa
                 if (!clinicId) {
-                    console.log('⚠️ Tentando encontrar primeira clínica ativa...')
-
                     const { data: availableClinics, error: clinicsError } = await supabase
                         .from('clinics')
                         .select('id, name')
@@ -501,7 +370,6 @@ export default function TeamPage() {
                         clinicId = availableClinics[0].id
                         console.log('✅ Usando primeira clínica ativa:', clinicId)
 
-                        // Associar o gerente a esta clínica
                         await supabase
                             .from('user_clinics')
                             .upsert({
@@ -511,10 +379,7 @@ export default function TeamPage() {
                     }
                 }
 
-                // Estratégia 4: Último recurso - criar clínica padrão
                 if (!clinicId) {
-                    console.log('⚠️ Criando clínica padrão...')
-
                     const { data: newClinic, error: createClinicError } = await supabase
                         .from('clinics')
                         .insert({
@@ -529,16 +394,12 @@ export default function TeamPage() {
                     }
 
                     clinicId = newClinic.id
-
-                    // Associar o gerente à nova clínica
                     await supabase
                         .from('user_clinics')
                         .insert({
                             user_id: profile.id,
                             clinic_id: clinicId
                         })
-
-                    console.log('✅ Clínica padrão criada:', clinicId)
                 }
             }
 
@@ -546,7 +407,7 @@ export default function TeamPage() {
                 throw new Error('Não foi possível determinar ou criar uma clínica para este gerente')
             }
 
-            // 2. Buscar código do estabelecimento do gerente
+            // 2. Buscar código do estabelecimento
             const { data: establishmentCode, error: estError } = await supabase
                 .from('establishment_codes')
                 .select('code')
@@ -580,7 +441,6 @@ export default function TeamPage() {
             await new Promise(resolve => setTimeout(resolve, 2000))
 
             // 5. Criar perfil
-            console.log('📝 Criando perfil...')
             const { error: profileError } = await supabase
                 .from('users')
                 .insert({
@@ -613,7 +473,6 @@ export default function TeamPage() {
             }
 
             // 6. Associar à clínica
-            console.log('🏥 Associando à clínica...')
             const { error: clinicAssocError } = await supabase
                 .from('user_clinics')
                 .insert({
@@ -626,7 +485,6 @@ export default function TeamPage() {
             }
 
             // 7. Criar hierarquia
-            console.log('👥 Criando hierarquia...')
             const { error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .insert({
@@ -641,14 +499,13 @@ export default function TeamPage() {
             }
 
             // 8. Vincular ao estabelecimento
-            console.log('🏢 Vinculando ao estabelecimento...')
             const { error: establishmentError } = await supabase
                 .from('user_establishments')
                 .insert({
                     user_id: newUserId,
                     establishment_code: establishmentCode.code,
                     status: 'active',
-                    added_by: profile.id
+                    added_by: profile?.id
                 })
 
             if (establishmentError) {
@@ -681,8 +538,6 @@ export default function TeamPage() {
         }
     }
 
-
-    // CORREÇÃO 4: Team Page - Função handleRemoveFromTeam
     const handleRemoveFromTeam = async () => {
         if (!selectedMember || !profile) {
             toast.error('Dados incompletos para remover consultor')
@@ -704,13 +559,24 @@ export default function TeamPage() {
             setIsRemoveModalOpen(false)
             setSelectedMember(null)
             await fetchTeamData()
-            await fetchAvailableConsultants()
         } catch (error: any) {
             console.error('Erro ao remover consultor da equipe:', error)
             toast.error('Erro ao remover consultor da equipe')
         } finally {
             setSubmitting(false)
         }
+    }
+
+    // 🔥 NOVAS FUNÇÕES: Para abrir e fechar modal de detalhes
+    const handleViewConsultant = (consultantId: string) => {
+        console.log('👁️ Abrindo detalhes do consultor:', consultantId)
+        setSelectedConsultantId(consultantId)
+        setIsDetailModalOpen(true)
+    }
+
+    const handleCloseDetailModal = () => {
+        setIsDetailModalOpen(false)
+        setSelectedConsultantId(null)
     }
 
     const handleSort = (field: typeof sortBy) => {
@@ -934,7 +800,7 @@ export default function TeamPage() {
                 </div>
             </motion.div>
 
-            {/* Team Members Table - Mantida igual à versão original */}
+            {/* Team Members Table */}
             <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1110,13 +976,14 @@ export default function TeamPage() {
                                         </td>
                                         <td>
                                             <div className="flex items-center space-x-2">
-                                                <Link
-                                                    href={`/dashboard/consultants?search=${member.email}`}
+                                                {/* 🔥 BOTÃO CORRIGIDO: Agora chama a função correta */}
+                                                <button
+                                                    onClick={() => handleViewConsultant(member.id)}
                                                     className="btn btn-ghost btn-sm"
                                                     title="Ver Detalhes"
                                                 >
                                                     <EyeIcon className="h-4 w-4" />
-                                                </Link>
+                                                </button>
                                                 <button
                                                     onClick={() => {
                                                         setSelectedMember(member)
@@ -1148,21 +1015,27 @@ export default function TeamPage() {
                                 </p>
                                 {teamMembers.length === 0 && (
                                     <button
-                                        onClick={() => setIsAddModalOpen(true)} // ❌ REMOVER: setModalType('create_new')
+                                        onClick={() => setIsAddModalOpen(true)}
                                         className="btn btn-primary mt-4"
                                     >
                                         <UserPlusIcon className="h-4 w-4 mr-2" />
                                         Adicionar Primeiro Membro
                                     </button>
                                 )}
-
                             </div>
                         )}
                     </div>
                 </div>
             </motion.div>
 
-            {/* MODAL PRINCIPAL CORRIGIDO */}
+            {/* 🔥 NOVO: Modal de Detalhes do Consultor */}
+            <ConsultantDetailModal
+                isOpen={isDetailModalOpen}
+                onClose={handleCloseDetailModal}
+                consultantId={selectedConsultantId}
+            />
+
+            {/* Modal de Adicionar Consultor */}
             <Transition appear show={isAddModalOpen} as={Fragment}>
                 <Dialog as="div" className="relative z-50" onClose={() => setIsAddModalOpen(false)}>
                     <Transition.Child
@@ -1336,7 +1209,7 @@ export default function TeamPage() {
                 </Dialog>
             </Transition>
 
-            {/* Remove Consultant Modal - Mantido igual */}
+            {/* Remove Consultant Modal */}
             <Transition appear show={isRemoveModalOpen} as={Fragment}>
                 <Dialog as="div" className="relative z-50" onClose={() => setIsRemoveModalOpen(false)}>
                     <Transition.Child

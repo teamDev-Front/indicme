@@ -1,4 +1,4 @@
-// src/app/dashboard/managers/page.tsx - CORREÇÃO para deletar gerentes
+// src/app/dashboard/managers/page.tsx - CORRIGIDA COM MODAL DE DETALHES
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -25,6 +25,7 @@ import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import EstablishmentAutocomplete from '@/components/establishments/EstablishmentAutocomplete'
+import ManagerDetailModal from '@/components/managers/ManagerDetailModal' // 🔥 NOVO IMPORT
 
 interface Manager {
   id: string
@@ -57,6 +58,8 @@ export default function ManagersPage() {
   const [selectedManager, setSelectedManager] = useState<Manager | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false) // 🔥 NOVO
+  const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null) // 🔥 NOVO
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [formData, setFormData] = useState({
     full_name: '',
@@ -217,6 +220,18 @@ export default function ManagersPage() {
   const handleCreateNewEstablishment = async (name: string) => {
     setFormData(prev => ({ ...prev, establishment_name: name }))
     toast.success('Novo estabelecimento criado!')
+  }
+
+  // 🔥 NOVAS FUNÇÕES: Para abrir e fechar modal de detalhes
+  const handleViewManager = (managerId: string) => {
+    console.log('👁️ Abrindo detalhes do gerente:', managerId)
+    setSelectedManagerId(managerId)
+    setIsDetailModalOpen(true)
+  }
+
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false)
+    setSelectedManagerId(null)
   }
 
   const handleOpenModal = async (mode: 'create' | 'edit', manager?: Manager) => {
@@ -606,7 +621,7 @@ export default function ManagersPage() {
     }
   }
 
-  // CORREÇÃO PRINCIPAL: Nova função para deletar gerente
+  // Função para deletar gerente (mantida a mesma)
   const handleDeleteManager = async () => {
     if (!selectedManager) return
 
@@ -614,7 +629,6 @@ export default function ManagersPage() {
       setSubmitting(true)
       console.log('🗑️ Iniciando processo de remoção do gerente:', selectedManager.full_name)
 
-      // 1. Verificar se tem consultores associados
       const { data: hierarchies, error: hierarchyError } = await supabase
         .from('hierarchies')
         .select('consultant_id')
@@ -630,9 +644,7 @@ export default function ManagersPage() {
         return
       }
 
-      // 2. Limpar dados relacionados primeiro (estratégia de cascata manual)
-      
-      // 2a. Remover comissões do gerente
+      // Limpar dados relacionados primeiro
       console.log('🧹 Removendo comissões...')
       const { error: commissionsError } = await supabase
         .from('commissions')
@@ -643,7 +655,6 @@ export default function ManagersPage() {
         console.warn('Aviso ao remover comissões:', commissionsError)
       }
 
-      // 2b. Remover associações com estabelecimentos
       console.log('🧹 Removendo associações com estabelecimentos...')
       const { error: establishmentsError } = await supabase
         .from('user_establishments')
@@ -654,7 +665,6 @@ export default function ManagersPage() {
         console.warn('Aviso ao remover estabelecimentos:', establishmentsError)
       }
 
-      // 2c. Remover associação com clínica
       console.log('🧹 Removendo associação com clínica...')
       const { error: clinicError } = await supabase
         .from('user_clinics')
@@ -665,7 +675,6 @@ export default function ManagersPage() {
         console.warn('Aviso ao remover associação com clínica:', clinicError)
       }
 
-      // 2d. Remover da tabela users (perfil)
       console.log('🧹 Removendo perfil...')
       const { error: userError } = await supabase
         .from('users')
@@ -676,10 +685,8 @@ export default function ManagersPage() {
         console.warn('Aviso ao remover perfil:', userError)
       }
 
-      // 3. Aguardar um pouco para garantir limpeza
       await new Promise(resolve => setTimeout(resolve, 1000))
 
-      // 4. Finalmente, tentar deletar do auth
       console.log('🔐 Removendo usuário do auth...')
       
       try {
@@ -687,7 +694,6 @@ export default function ManagersPage() {
         
         if (authError) {
           console.warn('Erro no auth.deleteUser (não crítico):', authError)
-          // Não interromper o processo se o auth der erro
           toast.success('Gerente removido do sistema! (Usuário permanece no auth, mas está inativo)')
         } else {
           console.log('✅ Usuário removido do auth com sucesso')
@@ -698,7 +704,6 @@ export default function ManagersPage() {
         toast.success('Gerente removido do sistema! (Perfil limpo, mas usuário permanece no auth inativo)')
       }
 
-      // 5. Atualizar lista local e fechar modal
       setManagers(prev => prev.filter(manager => manager.id !== selectedManager.id))
       setIsDeleteModalOpen(false)
       setSelectedManager(null)
@@ -708,7 +713,6 @@ export default function ManagersPage() {
     } catch (error: any) {
       console.error('❌ Erro ao deletar gerente:', error)
       
-      // Dar feedback mais específico
       if (error.message.includes('consultores')) {
         toast.error('Não é possível excluir gerente com consultores associados')
       } else if (error.message.includes('foreign key')) {
@@ -1106,9 +1110,14 @@ export default function ManagersPage() {
                     </td>
                     <td>
                       <div className="flex items-center space-x-2">
-                        {/* <button className="btn btn-ghost btn-sm" title="Visualizar">
+                        {/* 🔥 NOVO: Botão para visualizar detalhes */}
+                        <button
+                          onClick={() => handleViewManager(manager.id)}
+                          className="btn btn-ghost btn-sm"
+                          title="Visualizar Detalhes"
+                        >
                           <EyeIcon className="h-4 w-4" />
-                        </button> */}
+                        </button>
                         {canEdit && (
                           <>
                             <button
@@ -1164,7 +1173,14 @@ export default function ManagersPage() {
         </div>
       </motion.div>
 
-      {/* Create/Edit Manager Modal */}
+      {/* 🔥 NOVO: Modal de Detalhes do Gerente */}
+      <ManagerDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={handleCloseDetailModal}
+        managerId={selectedManagerId}
+      />
+
+      {/* Create/Edit Manager Modal (mantido igual) */}
       <Transition appear show={isModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsModalOpen(false)}>
           <Transition.Child
@@ -1301,7 +1317,7 @@ export default function ManagersPage() {
         </Dialog>
       </Transition>
 
-      {/* Delete Confirmation Modal - CORRIGIDO */}
+      {/* Delete Confirmation Modal (mantido igual) */}
       <Transition appear show={isDeleteModalOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50" onClose={() => setIsDeleteModalOpen(false)}>
           <Transition.Child
