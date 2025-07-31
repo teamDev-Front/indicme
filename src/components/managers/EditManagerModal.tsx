@@ -448,7 +448,7 @@ export default function EditManagerModal({
                         <div className="bg-info-50 border border-info-200 rounded-lg p-4">
                           <p className="text-sm text-info-700">
                             <strong>Nota:</strong> Esta é uma ação reversível. O gerente pode ser reativado 
-                            a qualquer momento alterando seu status para "Ativo".
+                            a qualquer momento alterando seu status para &quot;Ativo&quot;.
                           </p>
                         </div>
                       </div>
