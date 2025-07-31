@@ -159,235 +159,314 @@ export default function LeadsPage() {
     setShowArcadasModal(true)
   }
 
-  
-// SUBSTITUA a função handleConfirmConversion no arquivo LeadsPage.tsx
-// Adicionando logs detalhados para debug
 
-const handleConfirmConversion = async (arcadas: number) => {
-  if (!selectedLeadForConversion) return
+  // SUBSTITUA a função handleConfirmConversion no arquivo LeadsPage.tsx
+  // Adicionando logs detalhados para debug
 
-  try {
-    console.log('🎯 INICIANDO CONVERSÃO COM DEBUG DETALHADO')
-    console.log('📊 Lead:', selectedLeadForConversion.full_name, '| Arcadas:', arcadas)
+  const handleConfirmConversion = async (arcadas: number) => {
+    if (!selectedLeadForConversion) return
 
-    // ===== STEP 1: VERIFICAÇÕES DE SEGURANÇA =====
-    const { data: currentLead, error: checkError } = await supabase
-      .from('leads')
-      .select('status, arcadas_vendidas')
-      .eq('id', selectedLeadForConversion.id)
-      .single()
+    try {
+      console.log('🎯 INICIANDO CONVERSÃO COM DEBUG DETALHADO')
+      console.log('📊 Lead:', selectedLeadForConversion.full_name, '| Arcadas:', arcadas)
 
-    if (checkError) {
-      console.error('❌ Erro ao verificar status do lead:', checkError)
-      throw checkError
-    }
+      // ===== STEP 1: VERIFICAÇÕES DE SEGURANÇA =====
+      const { data: currentLead, error: checkError } = await supabase
+        .from('leads')
+        .select('status, arcadas_vendidas')
+        .eq('id', selectedLeadForConversion.id)
+        .single()
 
-    if (currentLead.status === 'converted') {
-      console.log('⚠️ LEAD JÁ CONVERTIDO - ABORTANDO')
-      toast.error('Este lead já foi convertido!')
-      setShowArcadasModal(false)
-      setSelectedLeadForConversion(null)
-      return
-    }
+      if (checkError) {
+        console.error('❌ Erro ao verificar status do lead:', checkError)
+        throw checkError
+      }
 
-    // ===== STEP 2: BUSCAR ESTABLISHMENT_CODE =====
-    console.log('🔍 Buscando establishment_code para usuário:', selectedLeadForConversion.indicated_by)
-    
-    const { data: userEstablishment, error: userEstError } = await supabase
-      .from('user_establishments')
-      .select('establishment_code')
-      .eq('user_id', selectedLeadForConversion.indicated_by)
-      .eq('status', 'active')
-      .single()
-
-    if (userEstError) {
-      console.error('❌ Erro ao buscar establishment do usuário:', userEstError)
-    }
-
-    const establishmentCode = userEstablishment?.establishment_code
-    console.log('🏢 Establishment code encontrado:', establishmentCode)
-
-    if (!establishmentCode) {
-      console.error('❌ ESTABLISHMENT CODE NÃO ENCONTRADO!')
-      toast.error('Erro: Código do estabelecimento não encontrado para este consultor')
-      return
-    }
-
-    // ===== STEP 3: BUSCAR CONFIGURAÇÕES DO ESTABELECIMENTO =====
-    console.log('⚙️ Buscando configurações para estabelecimento:', establishmentCode)
-    
-    const { data: settings, error: settingsError } = await supabase
-      .from('establishment_commissions')
-      .select('*')
-      .eq('establishment_code', establishmentCode)
-      .single()
-
-    if (settingsError) {
-      console.error('❌ Erro ao buscar configurações:', settingsError)
-      console.log('⚠️ Usando configurações padrão')
-    }
-
-    // 🔥 PONTO CRÍTICO: VERIFICAR OS VALORES AQUI
-    const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
-    const managerValuePerArcada = settings?.manager_value_per_arcada || 750
-    
-    console.log('💰 CONFIGURAÇÕES CARREGADAS:')
-    console.log('   - Valor por arcada (consultor):', consultantValuePerArcada)
-    console.log('   - Valor por arcada (gerente):', managerValuePerArcada)
-    console.log('   - Arcadas selecionadas:', arcadas)
-    console.log('   - Valor total calculado:', arcadas * consultantValuePerArcada)
-
-    // ===== VERIFICAR COMISSÕES EXISTENTES =====
-    const { data: existingCommissions, error: commissionsCheckError } = await supabase
-      .from('commissions')
-      .select('id, amount, type, establishment_code, valor_por_arcada, arcadas_vendidas')
-      .eq('lead_id', selectedLeadForConversion.id)
-
-    if (commissionsCheckError) {
-      console.error('❌ Erro ao verificar comissões existentes:', commissionsCheckError)
-      throw commissionsCheckError
-    }
-
-    if (existingCommissions && existingCommissions.length > 0) {
-      console.log('🔍 COMISSÕES EXISTENTES ENCONTRADAS:')
-      console.table(existingCommissions)
-
-      const consultantCommission = existingCommissions.find(c => c.type === 'consultant')
-      
-      if (consultantCommission) {
-        const expectedAmount = arcadas * consultantValuePerArcada
-        const hasWrongAmount = Math.abs(consultantCommission.amount - expectedAmount) > 0.01
-        const hasWrongEstablishment = !consultantCommission.establishment_code || 
-                                     consultantCommission.establishment_code !== establishmentCode
-        
-        console.log('🔍 VERIFICAÇÃO DE VALORES:')
-        console.log('   - Valor atual na comissão:', consultantCommission.amount)
-        console.log('   - Valor esperado:', expectedAmount)
-        console.log('   - Establishment atual:', consultantCommission.establishment_code)
-        console.log('   - Establishment esperado:', establishmentCode)
-        console.log('   - Precisa corrigir valor?', hasWrongAmount)
-        console.log('   - Precisa corrigir establishment?', hasWrongEstablishment)
-
-        if (hasWrongAmount || hasWrongEstablishment) {
-          console.log('🔧 CORRIGINDO COMISSÃO COM VALORES INCORRETOS...')
-          
-          const { error: updateError } = await supabase
-            .from('commissions')
-            .update({
-              amount: expectedAmount,
-              establishment_code: establishmentCode,
-              valor_por_arcada: consultantValuePerArcada,
-              arcadas_vendidas: arcadas,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', consultantCommission.id)
-
-          if (updateError) {
-            console.error('❌ Erro ao corrigir comissão:', updateError)
-            throw updateError
-          }
-
-          console.log('✅ COMISSÃO CORRIGIDA COM SUCESSO!')
-          toast.success('Lead convertido e comissão computada!')
-          
-        } else {
-          console.log('✅ COMISSÃO JÁ ESTÁ CORRETA')
-          toast.success('Lead já convertido com valores corretos!')
-        }
-
-        // Atualizar o lead se necessário
-        if (currentLead.status !== 'converted') {
-          await supabase
-            .from('leads')
-            .update({
-              status: 'converted',
-              arcadas_vendidas: arcadas,
-              establishment_code: establishmentCode,
-              converted_at: new Date().toISOString()
-            })
-            .eq('id', selectedLeadForConversion.id)
-        }
-
+      if (currentLead.status === 'converted') {
+        console.log('⚠️ LEAD JÁ CONVERTIDO - ABORTANDO')
+        toast.error('Este lead já foi convertido!')
         setShowArcadasModal(false)
         setSelectedLeadForConversion(null)
-        fetchLeads() // Recarregar a lista
         return
       }
+
+      // ===== STEP 2: BUSCAR ESTABLISHMENT_CODE =====
+      console.log('🔍 Buscando establishment_code para usuário:', selectedLeadForConversion.indicated_by)
+
+      const { data: userEstablishment, error: userEstError } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', selectedLeadForConversion.indicated_by)
+        .eq('status', 'active')
+        .single()
+
+      if (userEstError) {
+        console.error('❌ Erro ao buscar establishment do usuário:', userEstError)
+      }
+
+      const establishmentCode = userEstablishment?.establishment_code
+      console.log('🏢 Establishment code encontrado:', establishmentCode)
+
+      if (!establishmentCode) {
+        console.error('❌ ESTABLISHMENT CODE NÃO ENCONTRADO!')
+        toast.error('Erro: Código do estabelecimento não encontrado para este consultor')
+        return
+      }
+
+      // ===== 🔥 CORREÇÃO: BUSCAR CONFIGURAÇÕES CORRETAS DO ESTABELECIMENTO =====
+      console.log('⚙️ Buscando configurações ESPECÍFICAS do estabelecimento:', establishmentCode)
+
+      const { data: establishmentSettings, error: settingsError } = await supabase
+        .from('establishment_commissions')
+        .select('*')
+        .eq('establishment_code', establishmentCode)
+        .single()
+
+      if (settingsError) {
+        console.error('❌ Erro ao buscar configurações do estabelecimento:', settingsError)
+        console.log('⚠️ Usando configurações padrão')
+      }
+
+      // 🔥 VALORES CORRETOS: Usar configurações específicas do estabelecimento
+      const consultantValuePerArcada = establishmentSettings?.consultant_value_per_arcada || 750
+      const managerValuePerArcada = establishmentSettings?.manager_value_per_arcada || 750
+      const managerBonusActive = establishmentSettings?.manager_bonus_active !== false
+
+      console.log('💰 CONFIGURAÇÕES CARREGADAS DO ESTABELECIMENTO:')
+      console.log('   - Valor por arcada (consultor):', consultantValuePerArcada)
+      console.log('   - Valor por arcada (gerente):', managerValuePerArcada) // 🔥 ESTE É O VALOR CORRETO
+      console.log('   - Arcadas selecionadas:', arcadas)
+      console.log('   - Valor total calculado consultor:', arcadas * consultantValuePerArcada)
+      console.log('   - Valor total calculado gerente:', arcadas * managerValuePerArcada)
+
+      // ===== VERIFICAR COMISSÕES EXISTENTES =====
+      const { data: existingCommissions, error: commissionsCheckError } = await supabase
+        .from('commissions')
+        .select('id, amount, type, establishment_code, valor_por_arcada, arcadas_vendidas')
+        .eq('lead_id', selectedLeadForConversion.id)
+
+      if (commissionsCheckError) {
+        console.error('❌ Erro ao verificar comissões existentes:', commissionsCheckError)
+        throw commissionsCheckError
+      }
+
+      if (existingCommissions && existingCommissions.length > 0) {
+        console.log('🔍 COMISSÕES EXISTENTES ENCONTRADAS:')
+        console.table(existingCommissions)
+
+        const consultantCommission = existingCommissions.find(c => c.type === 'consultant')
+
+        if (consultantCommission) {
+          const expectedAmount = arcadas * consultantValuePerArcada
+          const hasWrongAmount = Math.abs(consultantCommission.amount - expectedAmount) > 0.01
+          const hasWrongEstablishment = !consultantCommission.establishment_code ||
+            consultantCommission.establishment_code !== establishmentCode
+
+          console.log('🔍 VERIFICAÇÃO DE VALORES CONSULTOR:')
+          console.log('   - Valor atual na comissão:', consultantCommission.amount)
+          console.log('   - Valor esperado:', expectedAmount)
+
+          if (hasWrongAmount || hasWrongEstablishment) {
+            console.log('🔧 CORRIGINDO COMISSÃO DO CONSULTOR...')
+
+            const { error: updateError } = await supabase
+              .from('commissions')
+              .update({
+                amount: expectedAmount,
+                establishment_code: establishmentCode,
+                valor_por_arcada: consultantValuePerArcada,
+                arcadas_vendidas: arcadas,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', consultantCommission.id)
+
+            if (updateError) {
+              console.error('❌ Erro ao corrigir comissão do consultor:', updateError)
+              throw updateError
+            }
+
+            console.log('✅ COMISSÃO DO CONSULTOR CORRIGIDA!')
+          }
+
+          // 🔥 CORREÇÃO: Verificar comissão do gerente também
+          const managerCommission = existingCommissions.find(c => c.type === 'manager')
+
+          if (managerCommission) {
+            const expectedManagerAmount = arcadas * managerValuePerArcada
+            const hasWrongManagerAmount = Math.abs(managerCommission.amount - expectedManagerAmount) > 0.01
+
+            console.log('🔍 VERIFICAÇÃO DE VALORES GERENTE:')
+            console.log('   - Valor atual na comissão gerente:', managerCommission.amount)
+            console.log('   - Valor esperado gerente:', expectedManagerAmount)
+            console.log('   - Valor por arcada usado:', managerValuePerArcada)
+
+            if (hasWrongManagerAmount) {
+              console.log('🔧 CORRIGINDO COMISSÃO DO GERENTE...')
+
+              const { error: updateManagerError } = await supabase
+                .from('commissions')
+                .update({
+                  amount: expectedManagerAmount,
+                  establishment_code: establishmentCode,
+                  valor_por_arcada: managerValuePerArcada, // 🔥 USAR O VALOR CORRETO
+                  arcadas_vendidas: arcadas,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', managerCommission.id)
+
+              if (updateManagerError) {
+                console.error('❌ Erro ao corrigir comissão do gerente:', updateManagerError)
+                throw updateManagerError
+              }
+
+              console.log('✅ COMISSÃO DO GERENTE CORRIGIDA!')
+              toast.success('Lead convertido e comissões corrigidas!')
+            } else {
+              console.log('✅ COMISSÃO DO GERENTE JÁ ESTÁ CORRETA')
+              toast.success('Lead já convertido com valores corretos!')
+            }
+          }
+
+          // Atualizar o lead se necessário
+          if (currentLead.status !== 'converted') {
+            await supabase
+              .from('leads')
+              .update({
+                status: 'converted',
+                arcadas_vendidas: arcadas,
+                establishment_code: establishmentCode,
+                converted_at: new Date().toISOString()
+              })
+              .eq('id', selectedLeadForConversion.id)
+          }
+
+          setShowArcadasModal(false)
+          setSelectedLeadForConversion(null)
+          fetchLeads() // Recarregar a lista
+          return
+        }
+      }
+
+      // ===== PROSSEGUIR COM CRIAÇÃO NOVA =====
+      console.log('📝 CRIANDO NOVA CONVERSÃO...')
+
+      // Atualizar o lead primeiro
+      const { error: leadError } = await supabase
+        .from('leads')
+        .update({
+          status: 'converted',
+          arcadas_vendidas: arcadas,
+          establishment_code: establishmentCode,
+          converted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedLeadForConversion.id)
+
+      if (leadError) {
+        console.error('❌ Erro ao atualizar lead:', leadError)
+        throw leadError
+      }
+
+      console.log('✅ LEAD ATUALIZADO COM SUCESSO')
+
+      // Calcular comissão do consultor
+      const valorBaseConsultor = arcadas * consultantValuePerArcada
+
+      console.log('💰 CRIANDO COMISSÃO DO CONSULTOR:')
+      console.log('   - Usuário ID:', selectedLeadForConversion.indicated_by)
+      console.log('   - Valor calculado:', valorBaseConsultor)
+      console.log('   - Valor por arcada:', consultantValuePerArcada)
+      console.log('   - Arcadas:', arcadas)
+      console.log('   - Establishment:', establishmentCode)
+
+      // Criar a comissão do consultor
+      const { data: consultantCommissionData, error: consultantCommissionError } = await supabase
+        .from('commissions')
+        .insert({
+          lead_id: selectedLeadForConversion.id,
+          user_id: selectedLeadForConversion.indicated_by,
+          clinic_id: selectedLeadForConversion.clinic_id,
+          establishment_code: establishmentCode,
+          amount: valorBaseConsultor,
+          percentage: 100,
+          type: 'consultant',
+          status: 'pending',
+          arcadas_vendidas: arcadas,
+          valor_por_arcada: consultantValuePerArcada,
+          bonus_conquistados: 0,
+          valor_bonus: 0
+        })
+        .select('id, amount')
+        .single()
+
+      if (consultantCommissionError) {
+        console.error('❌ ERRO AO CRIAR COMISSÃO DO CONSULTOR:', consultantCommissionError)
+        throw consultantCommissionError
+      }
+
+      console.log('✅ COMISSÃO DO CONSULTOR CRIADA:', consultantCommissionData)
+
+      // 🔥 CRIAR COMISSÃO DO GERENTE (SE HOUVER)
+      const { data: hierarchy } = await supabase
+        .from('hierarchies')
+        .select('manager_id')
+        .eq('consultant_id', selectedLeadForConversion.indicated_by)
+        .single()
+
+      if (hierarchy?.manager_id) {
+        console.log('👑 CRIANDO COMISSÃO DO GERENTE...')
+
+        // 🔥 USAR VALOR CORRETO DO GERENTE
+        const valorBaseGerente = arcadas * managerValuePerArcada
+
+        console.log('💰 CRIANDO COMISSÃO DO GERENTE:')
+        console.log('   - Manager ID:', hierarchy.manager_id)
+        console.log('   - Valor calculado:', valorBaseGerente)
+        console.log('   - Valor por arcada gerente:', managerValuePerArcada) // 🔥 VALOR CORRETO
+        console.log('   - Arcadas:', arcadas)
+
+        const { data: managerCommissionData, error: managerCommissionError } = await supabase
+          .from('commissions')
+          .insert({
+            lead_id: selectedLeadForConversion.id,
+            user_id: hierarchy.manager_id,
+            clinic_id: selectedLeadForConversion.clinic_id,
+            establishment_code: establishmentCode,
+            amount: valorBaseGerente, // 🔥 VALOR CORRETO
+            percentage: 100,
+            type: 'manager',
+            status: 'pending',
+            arcadas_vendidas: arcadas,
+            valor_por_arcada: managerValuePerArcada, // 🔥 VALOR CORRETO
+            bonus_conquistados: 0,
+            valor_bonus: 0
+          })
+          .select('id, amount')
+          .single()
+
+        if (managerCommissionError) {
+          console.error('❌ ERRO AO CRIAR COMISSÃO DO GERENTE:', managerCommissionError)
+          // Não falhar por causa do gerente, mas avisar
+          console.warn('⚠️ Continuando sem comissão do gerente')
+        } else {
+          console.log('✅ COMISSÃO DO GERENTE CRIADA:', managerCommissionData)
+          console.log('💰 Valor final da comissão do gerente:', managerCommissionData.amount)
+        }
+      }
+
+      toast.success(`Lead convertido! Comissão de R$ ${valorBaseConsultor.toLocaleString('pt-BR')} criada!`)
+
+      setShowArcadasModal(false)
+      setSelectedLeadForConversion(null)
+      fetchLeads()
+
+    } catch (error: any) {
+      console.error('❌ ERRO DURANTE CONVERSÃO:', error)
+      toast.error(`Erro ao converter lead: ${error.message}`)
+    } finally {
+      setUpdatingStatus(null)
     }
-
-    // ===== PROSSEGUIR COM CRIAÇÃO NOVA =====
-    console.log('📝 CRIANDO NOVA CONVERSÃO...')
-
-    // Atualizar o lead primeiro
-    const { error: leadError } = await supabase
-      .from('leads')
-      .update({
-        status: 'converted',
-        arcadas_vendidas: arcadas,
-        establishment_code: establishmentCode,
-        converted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', selectedLeadForConversion.id)
-
-    if (leadError) {
-      console.error('❌ Erro ao atualizar lead:', leadError)
-      throw leadError
-    }
-
-    console.log('✅ LEAD ATUALIZADO COM SUCESSO')
-
-    // Calcular comissão do consultor
-    const valorBaseConsultor = arcadas * consultantValuePerArcada
-    
-    console.log('💰 CRIANDO COMISSÃO DO CONSULTOR:')
-    console.log('   - Usuário ID:', selectedLeadForConversion.indicated_by)
-    console.log('   - Valor calculado:', valorBaseConsultor)
-    console.log('   - Valor por arcada:', consultantValuePerArcada)
-    console.log('   - Arcadas:', arcadas)
-    console.log('   - Establishment:', establishmentCode)
-
-    // 🔥 PONTO CRÍTICO: CRIAR A COMISSÃO COM O VALOR CORRETO
-    const { data: consultantCommissionData, error: consultantCommissionError } = await supabase
-      .from('commissions')
-      .insert({
-        lead_id: selectedLeadForConversion.id,
-        user_id: selectedLeadForConversion.indicated_by,
-        clinic_id: selectedLeadForConversion.clinic_id,
-        establishment_code: establishmentCode,
-        amount: valorBaseConsultor, // 🔥 VALOR CRÍTICO
-        percentage: 100,
-        type: 'consultant',
-        status: 'pending',
-        arcadas_vendidas: arcadas,
-        valor_por_arcada: consultantValuePerArcada, // 🔥 VALOR CRÍTICO
-        bonus_conquistados: 0,
-        valor_bonus: 0
-      })
-      .select('id, amount')
-      .single()
-
-    if (consultantCommissionError) {
-      console.error('❌ ERRO AO CRIAR COMISSÃO DO CONSULTOR:', consultantCommissionError)
-      throw consultantCommissionError
-    }
-
-    console.log('✅ COMISSÃO DO CONSULTOR CRIADA:', consultantCommissionData)
-    console.log('💰 Valor final da comissão:', consultantCommissionData.amount)
-
-    toast.success(`Lead convertido! Comissão de R$ ${valorBaseConsultor.toLocaleString('pt-BR')} criada!`)
-
-    setShowArcadasModal(false)
-    setSelectedLeadForConversion(null)
-    fetchLeads()
-
-  } catch (error: any) {
-    console.error('❌ ERRO DURANTE CONVERSÃO:', error)
-    toast.error(`Erro ao converter lead: ${error.message}`)
-  } finally {
-    setUpdatingStatus(null)
   }
-}
 
   const updateLeadStatus = async (leadId: string, newStatus: string) => {
     try {
@@ -854,7 +933,7 @@ const handleConfirmConversion = async (arcadas: number) => {
                           </button>
                         )}
 
-                      
+
 
                         <button
                           onClick={() => handleViewLead(lead.id)}
@@ -912,7 +991,7 @@ const handleConfirmConversion = async (arcadas: number) => {
         </div>
       </motion.div>
 
-     
+
 
       {/* Lead Detail Modal */}
       <LeadDetailModal
