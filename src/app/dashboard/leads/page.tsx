@@ -854,15 +854,7 @@ const handleConfirmConversion = async (arcadas: number) => {
                           </button>
                         )}
 
-                        {/* 🔥 NOVO: Mostrar comissão estimada para leads convertidos */}
-                        {lead.status === 'converted' && lead.arcadas_vendidas && (
-                          <div className="flex items-center text-xs text-success-600 bg-success-50 px-2 py-1 rounded">
-                            <CurrencyDollarIcon className="h-3 w-3 mr-1" />
-                            <span className="font-medium">
-                              R$ {(lead.arcadas_vendidas * 750).toLocaleString('pt-BR')}
-                            </span>
-                          </div>
-                        )}
+                      
 
                         <button
                           onClick={() => handleViewLead(lead.id)}
@@ -920,45 +912,7 @@ const handleConfirmConversion = async (arcadas: number) => {
         </div>
       </motion.div>
 
-      {/* 🔥 NOVO: Card de dicas para consultores */}
-      {profile?.role === 'consultant' && leads.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.8 }}
-          className="card"
-        >
-          <div className="card-body">
-            <h3 className="text-lg font-medium text-secondary-900 mb-4 flex items-center">
-              <StarIcon className="h-5 w-5 text-warning-500 mr-2" />
-              Dicas para Converter Leads
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center p-4 bg-primary-50 rounded-lg">
-                <PlayIcon className="h-8 w-8 text-primary-600 mx-auto mb-2" />
-                <h4 className="font-medium text-primary-900 mb-1">Conversão Rápida</h4>
-                <p className="text-sm text-primary-700">
-                  Use o botão ▶️ para converter leads rapidamente e calcular sua comissão automaticamente
-                </p>
-              </div>
-              <div className="text-center p-4 bg-success-50 rounded-lg">
-                <CurrencyDollarIcon className="h-8 w-8 text-success-600 mx-auto mb-2" />
-                <h4 className="font-medium text-success-900 mb-1">Comissões Transparentes</h4>
-                <p className="text-sm text-success-700">
-                  Veja em tempo real quanto você ganhará por cada conversão, incluindo bônus por metas
-                </p>
-              </div>
-              <div className="text-center p-4 bg-warning-50 rounded-lg">
-                <StarIcon className="h-8 w-8 text-warning-600 mx-auto mb-2" />
-                <h4 className="font-medium text-warning-900 mb-1">Sistema de Bônus</h4>
-                <p className="text-sm text-warning-700">
-                  Ganhe bônus extras a cada 7 arcadas vendidas. Acompanhe seu progresso nos detalhes
-                </p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
+     
 
       {/* Lead Detail Modal */}
       <LeadDetailModal
