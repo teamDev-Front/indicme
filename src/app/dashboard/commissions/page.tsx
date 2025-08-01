@@ -290,7 +290,11 @@ export default function CommissionsPage() {
   }
 
   const handlePayCommission = async (commissionId: string) => {
-    if (!profile || profile.role === 'consultant') return
+    // 🔥 ALTERAÇÃO: Apenas clinic_admin pode pagar comissões
+    if (!profile || profile.role !== 'clinic_admin') {
+      toast.error('Apenas administradores da clínica podem pagar comissões')
+      return
+    }
 
     try {
       setPayingCommission(commissionId)
@@ -328,7 +332,11 @@ export default function CommissionsPage() {
   }
 
   const handleCancelCommission = async (commissionId: string) => {
-    if (!profile || profile.role === 'consultant') return
+    // 🔥 ALTERAÇÃO: Apenas clinic_admin pode cancelar comissões
+    if (!profile || profile.role !== 'clinic_admin') {
+      toast.error('Apenas administradores da clínica podem cancelar comissões')
+      return
+    }
 
     try {
       const { error } = await supabase
@@ -396,7 +404,8 @@ export default function CommissionsPage() {
     return matchesSearch && matchesStatus && matchesType && matchesDate
   })
 
-  const canManageCommissions = profile?.role === 'clinic_admin' || profile?.role === 'manager'
+  // 🔥 ALTERAÇÃO: Apenas clinic_admin pode gerenciar comissões
+  const canManageCommissions = profile?.role === 'clinic_admin'
 
   if (loading) {
     return (
@@ -417,9 +426,15 @@ export default function CommissionsPage() {
           <p className="text-secondary-600">
             {profile?.role === 'consultant'
               ? 'Acompanhe seus ganhos e comissões'
-              : 'Gerencie todas as comissões da clínica'
+              : 'Visualize todas as comissões da clínica'
             }
           </p>
+          {/* 🔥 NOVO: Aviso sobre permissões para não-admins */}
+          {profile?.role !== 'clinic_admin' && profile?.role !== 'consultant' && (
+            <p className="text-sm text-warning-600 mt-1">
+              ⚠️ Apenas administradores da clínica podem pagar ou cancelar comissões
+            </p>
+          )}
         </div>
 
         {/* {canManageCommissions && (
@@ -768,14 +783,6 @@ export default function CommissionsPage() {
                               × {commission.arcadas_vendidas} arcada{commission.arcadas_vendidas > 1 ? 's' : ''}
                             </div>
                           )}
-                          {/* {commission.valor_bonus && commission.valor_bonus > 0 && (
-                            <div className="text-warning-600">
-                              Bônus: R$ {commission.valor_bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              {commission.bonus_conquistados && commission.bonus_conquistados > 0 &&
-                                ` (${commission.bonus_conquistados}x)`
-                              }
-                            </div>
-                          )} */}
                           {/* 🔥 NOVO: Mostrar cálculo detalhado para debug */}
                           {process.env.NODE_ENV === 'development' && (
                             <div className="text-xs text-gray-400">
@@ -836,7 +843,7 @@ export default function CommissionsPage() {
                       )}
                     </td>
 
-                    {/* Coluna Ações (mantida igual) */}
+                    {/* 🔥 ALTERAÇÃO: Coluna Ações apenas para clinic_admin */}
                     {canManageCommissions && (
                       <td>
                         <div className="flex items-center space-x-2">
@@ -846,7 +853,7 @@ export default function CommissionsPage() {
                                 onClick={() => handlePayCommission(commission.id)}
                                 disabled={payingCommission === commission.id}
                                 className="btn btn-success btn-sm"
-                                title="Pagar"
+                                title="Pagar comissão"
                               >
                                 {payingCommission === commission.id ? (
                                   <div className="loading-spinner w-3 h-3"></div>
@@ -857,7 +864,7 @@ export default function CommissionsPage() {
                               <button
                                 onClick={() => handleCancelCommission(commission.id)}
                                 className="btn btn-danger btn-sm"
-                                title="Cancelar"
+                                title="Cancelar comissão"
                               >
                                 <XCircleIcon className="h-4 w-4" />
                               </button>
@@ -868,6 +875,17 @@ export default function CommissionsPage() {
                               {commission.status === 'paid' ? 'Paga' : 'Cancelada'}
                             </span>
                           )}
+                        </div>
+                      </td>
+                    )}
+
+                    {/* 🔥 NOVO: Mostrar mensagem para usuários sem permissão */}
+                    {!canManageCommissions && profile?.role !== 'consultant' && (
+                      <td>
+                        <div className="text-xs text-secondary-400 text-center">
+                          <span title="Apenas administradores da clínica podem gerenciar comissões">
+                            🔒 Sem permissão
+                          </span>
                         </div>
                       </td>
                     )}
