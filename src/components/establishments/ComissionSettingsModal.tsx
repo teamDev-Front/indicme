@@ -1,5 +1,3 @@
-// src/app/dashboard/establishments/page.tsx - ATUALIZADO com comissões independentes para consultor e gerente
-
 'use client'
 
 import { Fragment, useState, useEffect } from 'react'
@@ -25,12 +23,13 @@ interface CommissionSettingsModalProps {
 interface EstablishmentCommission {
   id?: string
   establishment_code: string
-  // Configurações do Consultor
+  // 🔥 NOVO: Configurações do Consultor com toggle
+  consultant_active: boolean
   consultant_value_per_arcada: number
   consultant_bonus_every_arcadas: number
   consultant_bonus_value: number
-  // Configurações do Gerente - ATUALIZADO com valor independente
-  manager_value_per_arcada: number // 🔥 NOVO: Valor independente para gerente
+  // Configurações do Gerente - com toggle existente
+  manager_value_per_arcada: number
   manager_bonus_active: boolean
   manager_bonus_35_arcadas: number
   manager_bonus_50_arcadas: number
@@ -49,12 +48,13 @@ export default function CommissionSettingsModal({
 }: CommissionSettingsModalProps) {
   const [settings, setSettings] = useState<EstablishmentCommission>({
     establishment_code: establishmentCode,
-    // Valores padrão para consultores
+    // 🔥 NOVO: Valores padrão para consultores com toggle ativo
+    consultant_active: true,
     consultant_value_per_arcada: 750,
     consultant_bonus_every_arcadas: 7,
     consultant_bonus_value: 750,
-    // Valores padrão para gerentes - ATUALIZADO
-    manager_value_per_arcada: 750, // 🔥 NOVO: Valor independente, inicialmente igual ao consultor
+    // Valores padrão para gerentes
+    manager_value_per_arcada: 750,
     manager_bonus_active: true,
     manager_bonus_35_arcadas: 5000,
     manager_bonus_50_arcadas: 10000,
@@ -89,8 +89,9 @@ export default function CommissionSettingsModal({
         setSettings({
           ...data,
           establishment_code: establishmentCode,
+          // 🔥 NOVO: Garantir que o campo consultant_active existe
+          consultant_active: data.consultant_active !== false, // Padrão ativo se não existir
           manager_bonus_active: data.manager_bonus_active !== false,
-          // 🔥 NOVO: Garantir que o campo manager_value_per_arcada existe
           manager_value_per_arcada: data.manager_value_per_arcada || data.consultant_value_per_arcada || 750,
         })
       } else {
@@ -112,8 +113,8 @@ export default function CommissionSettingsModal({
     try {
       setSaving(true)
 
-      // Validações
-      if (settings.consultant_value_per_arcada <= 0) {
+      // 🔥 ATUALIZADO: Validações incluindo consultor ativo
+      if (settings.consultant_active && settings.consultant_value_per_arcada <= 0) {
         toast.error('Valor por arcada do consultor deve ser maior que zero')
         return
       }
@@ -123,22 +124,25 @@ export default function CommissionSettingsModal({
         return
       }
 
-      if (settings.consultant_bonus_every_arcadas <= 0) {
+      if (settings.consultant_active && settings.consultant_bonus_every_arcadas <= 0) {
         toast.error('Intervalo de bônus do consultor deve ser maior que zero')
         return
       }
 
-      if (settings.consultant_bonus_value <= 0) {
+      if (settings.consultant_active && settings.consultant_bonus_value <= 0) {
         toast.error('Valor do bônus do consultor deve ser maior que zero')
         return
       }
 
       const dataToSave = {
         establishment_code: establishmentCode,
-        consultant_value_per_arcada: settings.consultant_value_per_arcada,
-        consultant_bonus_every_arcadas: settings.consultant_bonus_every_arcadas,
-        consultant_bonus_value: settings.consultant_bonus_value,
-        manager_value_per_arcada: settings.manager_value_per_arcada, // 🔥 NOVO: Salvar valor independente
+        // 🔥 NOVO: Salvar configurações do consultor com toggle
+        consultant_active: settings.consultant_active,
+        consultant_value_per_arcada: settings.consultant_active ? settings.consultant_value_per_arcada : 0,
+        consultant_bonus_every_arcadas: settings.consultant_active ? settings.consultant_bonus_every_arcadas : 0,
+        consultant_bonus_value: settings.consultant_active ? settings.consultant_bonus_value : 0,
+        // Configurações do gerente existentes
+        manager_value_per_arcada: settings.manager_value_per_arcada,
         manager_bonus_active: settings.manager_bonus_active,
         manager_bonus_35_arcadas: settings.manager_bonus_active ? settings.manager_bonus_35_arcadas : 0,
         manager_bonus_50_arcadas: settings.manager_bonus_active ? settings.manager_bonus_50_arcadas : 0,
@@ -183,6 +187,15 @@ export default function CommissionSettingsModal({
   }
 
   const calculateConsultantPreview = () => {
+    if (!settings.consultant_active) {
+      return {
+        valorBase: 0,
+        bonusGanhos: 0,
+        valorBonus: 0,
+        valorTotal: 0
+      }
+    }
+
     const valorBase = previewArcadas * settings.consultant_value_per_arcada
     const bonusGanhos = Math.floor(previewArcadas / settings.consultant_bonus_every_arcadas)
     const valorBonus = bonusGanhos * settings.consultant_bonus_value
@@ -195,7 +208,6 @@ export default function CommissionSettingsModal({
   }
 
   const calculateManagerPreview = () => {
-    // 🔥 ATUALIZADO: Usar valor independente do gerente
     const comissaoBase = previewArcadas * settings.manager_value_per_arcada
 
     let managerBonus = 0
@@ -280,79 +292,117 @@ export default function CommissionSettingsModal({
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       {/* Configurações */}
                       <div className="space-y-6">
-                        {/* Configurações do Consultor */}
+                        {/* 🔥 NOVO: Configurações do Consultor com toggle */}
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                          <h4 className="text-lg font-medium text-blue-900 mb-4 flex items-center">
-                            <CurrencyDollarIcon className="h-5 w-5 mr-2" />
-                            Comissões do Consultor
-                          </h4>
-
-                          <div className="space-y-4">
-                            <div>
-                              <label className="block text-sm font-medium text-blue-800 mb-2">
-                                Valor por Arcada (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input"
-                                value={settings.consultant_value_per_arcada}
-                                onChange={(e) => setSettings(prev => ({
+                          <div className="flex items-center justify-between mb-4">
+                            <h4 className="text-lg font-medium text-blue-900 flex items-center">
+                              <CurrencyDollarIcon className="h-5 w-5 mr-2" />
+                              Comissões do Consultor
+                            </h4>
+                            
+                            {/* 🔥 NOVO: Toggle para ativar/desativar comissões do consultor */}
+                            <div className="flex items-center space-x-2">
+                              <span className="text-sm text-blue-700">Ativo:</span>
+                              <button
+                                type="button"
+                                onClick={() => setSettings(prev => ({
                                   ...prev,
-                                  consultant_value_per_arcada: parseFloat(e.target.value) || 0
+                                  consultant_active: !prev.consultant_active
                                 }))}
-                                placeholder="750.00"
-                              />
-                              <p className="text-xs text-blue-600 mt-1">
-                                Valor fixo pago por cada arcada vendida
-                              </p>
-                            </div>
-
-                            <div>
-                              <label className="block text-sm font-medium text-blue-800 mb-2">
-                                Bônus a cada X arcadas
-                              </label>
-                              <input
-                                type="number"
-                                min="1"
-                                className="input"
-                                value={settings.consultant_bonus_every_arcadas}
-                                onChange={(e) => setSettings(prev => ({
-                                  ...prev,
-                                  consultant_bonus_every_arcadas: parseInt(e.target.value) || 1
-                                }))}
-                                placeholder="7"
-                              />
-                              <p className="text-xs text-blue-600 mt-1">
-                                A cada quantas arcadas o consultor ganha bônus
-                              </p>
-                            </div>
-
-                            <div>
-                              <label className="block text-sm font-medium text-blue-800 mb-2">
-                                Valor do Bônus (R$)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                className="input"
-                                value={settings.consultant_bonus_value}
-                                onChange={(e) => setSettings(prev => ({
-                                  ...prev,
-                                  consultant_bonus_value: parseFloat(e.target.value) || 0
-                                }))}
-                                placeholder="750.00"
-                              />
-                              <p className="text-xs text-blue-600 mt-1">
-                                Valor adicional ganho a cada marco de arcadas
-                              </p>
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                  settings.consultant_active ? 'bg-blue-600' : 'bg-gray-300'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                    settings.consultant_active ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                              <span className="text-sm font-medium text-blue-700">
+                                {settings.consultant_active ? 'Ativo' : 'Inativo'}
+                              </span>
                             </div>
                           </div>
+
+                          {/* 🔥 ATUALIZADO: Campos só aparecem se ativo */}
+                          {settings.consultant_active ? (
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-medium text-blue-800 mb-2">
+                                  Valor por Arcada (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="input"
+                                  value={settings.consultant_value_per_arcada}
+                                  onChange={(e) => setSettings(prev => ({
+                                    ...prev,
+                                    consultant_value_per_arcada: parseFloat(e.target.value) || 0
+                                  }))}
+                                  placeholder="750.00"
+                                />
+                                <p className="text-xs text-blue-600 mt-1">
+                                  Valor fixo pago por cada arcada vendida
+                                </p>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-medium text-blue-800 mb-2">
+                                  Bônus a cada X arcadas
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  className="input"
+                                  value={settings.consultant_bonus_every_arcadas}
+                                  onChange={(e) => setSettings(prev => ({
+                                    ...prev,
+                                    consultant_bonus_every_arcadas: parseInt(e.target.value) || 1
+                                  }))}
+                                  placeholder="7"
+                                />
+                                <p className="text-xs text-blue-600 mt-1">
+                                  A cada quantas arcadas o consultor ganha bônus
+                                </p>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-medium text-blue-800 mb-2">
+                                  Valor do Bônus (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="input"
+                                  value={settings.consultant_bonus_value}
+                                  onChange={(e) => setSettings(prev => ({
+                                    ...prev,
+                                    consultant_bonus_value: parseFloat(e.target.value) || 0
+                                  }))}
+                                  placeholder="750.00"
+                                />
+                                <p className="text-xs text-blue-600 mt-1">
+                                  Valor adicional ganho a cada marco de arcadas
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="bg-gray-100 rounded p-3">
+                              <p className="text-sm text-gray-600">
+                                🚫 Comissões de consultor desativadas. Consultores não receberão comissões neste estabelecimento.
+                              </p>
+                              <p className="text-xs text-gray-500 mt-2">
+                                ⚠️ Atenção: Esta configuração afetará todos os consultores deste estabelecimento
+                              </p>
+                            </div>
+                          )}
                         </div>
 
-                        {/* Configurações do Gerente - ATUALIZADO */}
+                        {/* Configurações do Gerente (mantidas iguais) */}
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                           <div className="flex items-center justify-between mb-4">
                             <h4 className="text-lg font-medium text-green-900 flex items-center">
@@ -386,7 +436,7 @@ export default function CommissionSettingsModal({
                           </div>
 
                           <div className="space-y-4">
-                            {/* 🔥 NOVO: Campo para valor por arcada do gerente */}
+                            {/* Campo para valor por arcada do gerente */}
                             <div>
                               <label className="block text-sm font-medium text-green-800 mb-2">
                                 Valor por Arcada do Gerente (R$)
@@ -503,27 +553,36 @@ export default function CommissionSettingsModal({
                             />
                           </div>
 
-                          {/* Preview Consultor */}
+                          {/* 🔥 ATUALIZADO: Preview Consultor com status ativo/inativo */}
                           <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                            <h5 className="font-medium text-blue-900 mb-3">Ganhos do Consultor</h5>
-                            <div className="space-y-2 text-sm">
-                              <div className="flex justify-between">
-                                <span className="text-blue-700">Valor base ({previewArcadas} arcadas):</span>
-                                <span className="font-medium">R$ {consultantPreview.valorBase.toLocaleString('pt-BR')}</span>
+                            <h5 className="font-medium text-blue-900 mb-3">
+                              Ganhos do Consultor {!settings.consultant_active && '(INATIVO)'}
+                            </h5>
+                            {settings.consultant_active ? (
+                              <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                  <span className="text-blue-700">Valor base ({previewArcadas} arcadas):</span>
+                                  <span className="font-medium">R$ {consultantPreview.valorBase.toLocaleString('pt-BR')}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-blue-700">Bônus ({consultantPreview.bonusGanhos}x):</span>
+                                  <span className="font-medium">R$ {consultantPreview.valorBonus.toLocaleString('pt-BR')}</span>
+                                </div>
+                                <hr className="border-blue-300" />
+                                <div className="flex justify-between text-lg font-bold text-blue-900">
+                                  <span>Total Consultor:</span>
+                                  <span>R$ {consultantPreview.valorTotal.toLocaleString('pt-BR')}</span>
+                                </div>
                               </div>
-                              <div className="flex justify-between">
-                                <span className="text-blue-700">Bônus ({consultantPreview.bonusGanhos}x):</span>
-                                <span className="font-medium">R$ {consultantPreview.valorBonus.toLocaleString('pt-BR')}</span>
+                            ) : (
+                              <div className="text-center py-4">
+                                <p className="text-sm text-gray-600">🚫 Comissões de consultor desativadas</p>
+                                <p className="text-xs text-gray-500 mt-1">Consultores não receberão comissões</p>
                               </div>
-                              <hr className="border-blue-300" />
-                              <div className="flex justify-between text-lg font-bold text-blue-900">
-                                <span>Total Consultor:</span>
-                                <span>R$ {consultantPreview.valorTotal.toLocaleString('pt-BR')}</span>
-                              </div>
-                            </div>
+                            )}
                           </div>
 
-                          {/* Preview Gerente - ATUALIZADO */}
+                          {/* Preview Gerente (mantido igual) */}
                           <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                             <h5 className="font-medium text-green-900 mb-3">
                               Ganhos do Gerente {!settings.manager_bonus_active && '(Só Base)'}
@@ -536,9 +595,9 @@ export default function CommissionSettingsModal({
                               <div className="flex justify-between text-xs">
                                 <span className="text-green-600">@ R$ {settings.manager_value_per_arcada}/arcada</span>
                                 <span className="text-green-600">
-                                  {settings.manager_value_per_arcada === settings.consultant_value_per_arcada ? 
+                                  {settings.consultant_active && settings.manager_value_per_arcada === settings.consultant_value_per_arcada ? 
                                     '(mesmo valor que consultor)' : 
-                                    '(valor diferente do consultor)'
+                                    settings.consultant_active ? '(valor diferente do consultor)' : '(consultor inativo)'
                                   }
                                 </span>
                               </div>
@@ -574,25 +633,42 @@ export default function CommissionSettingsModal({
                             </div>
                           </div>
 
-                          {/* Total Geral */}
+                          {/* Total Geral - ATUALIZADO */}
                           <div className="mt-4 bg-primary-50 border border-primary-200 rounded-lg p-4">
                             <div className="flex justify-between text-lg font-bold text-primary-900">
                               <span>Custo Total ({previewArcadas} arcadas):</span>
                               <span>R$ {(consultantPreview.valorTotal + managerPreview.valorTotal).toLocaleString('pt-BR')}</span>
                             </div>
+                            {!settings.consultant_active && (
+                              <p className="text-xs text-primary-600 mt-1">
+                                ⚠️ Consultores inativos - apenas custos de gerente
+                              </p>
+                            )}
                           </div>
                         </div>
 
-                        {/* Marcos de Referência - ATUALIZADO */}
+                        {/* 🔥 ATUALIZADO: Marcos de Referência com status dos toggles */}
                         <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
-                          <h5 className="font-medium text-warning-900 mb-3">Marcos Importantes</h5>
+                          <h5 className="font-medium text-warning-900 mb-3">Configuração Atual</h5>
                           <div className="space-y-2 text-sm text-warning-700">
-                            <div>• Consultor: R$ {settings.consultant_value_per_arcada}/arcada + bônus a cada {settings.consultant_bonus_every_arcadas} arcadas</div>
-                            <div>• Gerente: R$ {settings.manager_value_per_arcada}/arcada da equipe 
-                              {settings.manager_bonus_active ? 
-                                ' + marcos em 35, 50 e 75 arcadas' : 
-                                ' (sem bônus)'
-                              }
+                            <div className="flex items-center">
+                              <span className={`inline-block w-3 h-3 rounded-full mr-2 ${settings.consultant_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                              <span>
+                                Consultor: {settings.consultant_active ? 
+                                  `R$ ${settings.consultant_value_per_arcada}/arcada + bônus a cada ${settings.consultant_bonus_every_arcadas} arcadas` : 
+                                  'INATIVO - sem comissões'
+                                }
+                              </span>
+                            </div>
+                            <div className="flex items-center">
+                              <span className="inline-block w-3 h-3 rounded-full bg-green-500 mr-2"></span>
+                              <span>
+                                Gerente: R$ {settings.manager_value_per_arcada}/arcada da equipe 
+                                {settings.manager_bonus_active ? 
+                                  ' + marcos em 35, 50 e 75 arcadas' : 
+                                  ' (sem bônus)'
+                                }
+                              </span>
                             </div>
                             {settings.manager_bonus_active && (
                               <div>• Próximo marco gerente: {
@@ -601,6 +677,18 @@ export default function CommissionSettingsModal({
                                     previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
                                       'Todos os marcos atingidos!'
                               }</div>
+                            )}
+                            
+                            {/* 🔥 NOVO: Alerta se consultor estiver inativo */}
+                            {!settings.consultant_active && (
+                              <div className="mt-3 p-2 bg-red-100 border border-red-200 rounded">
+                                <p className="text-red-800 text-xs font-medium">
+                                  ⚠️ ATENÇÃO: Comissões de consultor estão DESATIVADAS!
+                                </p>
+                                <p className="text-red-700 text-xs mt-1">
+                                  Consultores deste estabelecimento não receberão comissões por vendas.
+                                </p>
+                              </div>
                             )}
                           </div>
                         </div>

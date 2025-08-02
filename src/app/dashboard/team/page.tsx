@@ -1,4 +1,4 @@
-// src/app/dashboard/team/page.tsx - CORREÇÃO COMPLETA COM MODAL DE DETALHES
+// src/app/dashboard/team/page.tsx - ATUALIZADO com cards segregados
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -23,12 +23,14 @@ import {
     UserMinusIcon,
     BuildingOfficeIcon,
     InformationCircleIcon,
+    UserGroupIcon,
+    TrophyIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { Dialog, Transition } from '@headlessui/react'
 import { Fragment } from 'react'
 import Link from 'next/link'
-import ConsultantDetailModal from '@/components/consultants/ConsultantDetailModal' // 🔥 IMPORTAR COMPONENTE
+import ConsultantDetailModal from '@/components/consultants/ConsultantDetailModal'
 
 // Interfaces existentes (mantidas as mesmas)
 interface TeamMember {
@@ -57,14 +59,21 @@ interface TeamMember {
     }
 }
 
+// 🔥 NOVA INTERFACE: Stats separados
 interface TeamStats {
     totalMembers: number
     activeMembers: number
     totalLeads: number
     totalConversions: number
     teamConversionRate: number
-    totalCommissions: number
-    totalPaidCommissions: number
+    // Comissões da equipe (consultores)
+    teamTotalCommissions: number
+    teamPaidCommissions: number
+    teamPendingCommissions: number
+    // Comissões do gerente
+    managerTotalCommissions: number
+    managerPaidCommissions: number
+    managerPendingCommissions: number
 }
 
 export default function TeamPage() {
@@ -77,8 +86,12 @@ export default function TeamPage() {
         totalLeads: 0,
         totalConversions: 0,
         teamConversionRate: 0,
-        totalCommissions: 0,
-        totalPaidCommissions: 0,
+        teamTotalCommissions: 0,
+        teamPaidCommissions: 0,
+        teamPendingCommissions: 0,
+        managerTotalCommissions: 0,
+        managerPaidCommissions: 0,
+        managerPendingCommissions: 0,
     })
     const [loading, setLoading] = useState(true)
     const [searchTerm, setSearchTerm] = useState('')
@@ -90,8 +103,8 @@ export default function TeamPage() {
     // Estados para modais
     const [isAddModalOpen, setIsAddModalOpen] = useState(false)
     const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false)
-    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false) // 🔥 NOVO
-    const [selectedConsultantId, setSelectedConsultantId] = useState<string | null>(null) // 🔥 NOVO
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+    const [selectedConsultantId, setSelectedConsultantId] = useState<string | null>(null)
 
     const [submitting, setSubmitting] = useState(false)
 
@@ -112,7 +125,7 @@ export default function TeamPage() {
         }
     }, [profile])
 
-    // Todas as funções existentes mantidas (fetchManagerEstablishments, fetchTeamData, etc.)
+    // Função existente mantida
     const fetchManagerEstablishments = async () => {
         try {
             const { data: userEstablishments, error } = await supabase
@@ -139,6 +152,7 @@ export default function TeamPage() {
         }
     }
 
+    // 🔥 FUNÇÃO ATUALIZADA: fetchTeamData com stats segregados
     const fetchTeamData = async () => {
         try {
             setLoading(true)
@@ -166,16 +180,9 @@ export default function TeamPage() {
             if (hierarchyError) throw hierarchyError
 
             if (!hierarchyData || hierarchyData.length === 0) {
+                // 🔥 ATUALIZADO: Buscar comissões do gerente mesmo sem equipe
+                await fetchManagerCommissions()
                 setTeamMembers([])
-                setTeamStats({
-                    totalMembers: 0,
-                    activeMembers: 0,
-                    totalLeads: 0,
-                    totalConversions: 0,
-                    teamConversionRate: 0,
-                    totalCommissions: 0,
-                    totalPaidCommissions: 0,
-                })
                 setLoading(false)
                 return
             }
@@ -246,19 +253,8 @@ export default function TeamPage() {
             const validMembers = teamMembersWithStats.filter(Boolean) as TeamMember[]
             setTeamMembers(validMembers)
 
-            // Calcular stats da equipe
-            const stats: TeamStats = {
-                totalMembers: validMembers.length,
-                activeMembers: validMembers.filter(m => m.status === 'active').length,
-                totalLeads: validMembers.reduce((sum, m) => sum + (m._stats?.totalLeads || 0), 0),
-                totalConversions: validMembers.reduce((sum, m) => sum + (m._stats?.convertedLeads || 0), 0),
-                teamConversionRate: 0,
-                totalCommissions: validMembers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0),
-                totalPaidCommissions: validMembers.reduce((sum, m) => sum + (m._stats?.paidCommissions || 0), 0),
-            }
-
-            stats.teamConversionRate = stats.totalLeads > 0 ? (stats.totalConversions / stats.totalLeads) * 100 : 0
-            setTeamStats(stats)
+            // 🔥 ATUALIZADO: Buscar comissões do gerente separadamente
+            await fetchManagerCommissions(validMembers)
 
         } catch (error: any) {
             console.error('❌ Erro ao buscar dados da equipe:', error)
@@ -268,6 +264,62 @@ export default function TeamPage() {
         }
     }
 
+    // 🔥 NOVA FUNÇÃO: Buscar comissões do gerente separadamente
+    const fetchManagerCommissions = async (teamMembers: TeamMember[] = []) => {
+        try {
+            console.log('💰 Buscando comissões do gerente:', profile?.id)
+
+            // Buscar comissões do gerente
+            const { data: managerCommissions } = await supabase
+                .from('commissions')
+                .select('amount, status, type')
+                .eq('user_id', profile?.id)
+                .eq('type', 'manager')
+
+            console.log('📊 Comissões do gerente encontradas:', managerCommissions?.length || 0)
+
+            // Calcular stats do gerente
+            const managerTotalCommissions = managerCommissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+            const managerPaidCommissions = managerCommissions?.filter(c => c.status === 'paid')
+                .reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+            const managerPendingCommissions = managerCommissions?.filter(c => c.status === 'pending')
+                .reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+
+            // Calcular stats da equipe (consultores)
+            const teamTotalCommissions = teamMembers.reduce((sum, m) => sum + (m._stats?.totalCommissions || 0), 0)
+            const teamPaidCommissions = teamMembers.reduce((sum, m) => sum + (m._stats?.paidCommissions || 0), 0)
+            const teamPendingCommissions = teamMembers.reduce((sum, m) => sum + (m._stats?.pendingCommissions || 0), 0)
+
+            // Calcular stats gerais
+            const totalLeads = teamMembers.reduce((sum, m) => sum + (m._stats?.totalLeads || 0), 0)
+            const totalConversions = teamMembers.reduce((sum, m) => sum + (m._stats?.convertedLeads || 0), 0)
+            const teamConversionRate = totalLeads > 0 ? (totalConversions / totalLeads) * 100 : 0
+
+            const stats: TeamStats = {
+                totalMembers: teamMembers.length,
+                activeMembers: teamMembers.filter(m => m.status === 'active').length,
+                totalLeads,
+                totalConversions,
+                teamConversionRate,
+                // Stats da equipe (consultores)
+                teamTotalCommissions,
+                teamPaidCommissions,
+                teamPendingCommissions,
+                // Stats do gerente
+                managerTotalCommissions,
+                managerPaidCommissions,
+                managerPendingCommissions,
+            }
+
+            console.log('📊 Stats calculados:', stats)
+            setTeamStats(stats)
+
+        } catch (error) {
+            console.error('❌ Erro ao buscar comissões do gerente:', error)
+        }
+    }
+
+    // Todas as outras funções existentes mantidas (handleCreateNewConsultant, handleRemoveFromTeam, etc.)
     const handleCreateNewConsultant = async () => {
         if (!profile) {
             toast.error('Usuário não autenticado')
@@ -282,7 +334,7 @@ export default function TeamPage() {
         try {
             setSubmitting(true)
 
-            // 1. Buscar clínica
+            // Buscar clínica
             console.log('🔍 Buscando clínica do gerente:', profile.id)
 
             let clinicId: string | null = null
@@ -407,7 +459,7 @@ export default function TeamPage() {
                 throw new Error('Não foi possível determinar ou criar uma clínica para este gerente')
             }
 
-            // 2. Buscar código do estabelecimento
+            // Buscar código do estabelecimento
             const { data: establishmentCode, error: estError } = await supabase
                 .from('establishment_codes')
                 .select('code')
@@ -418,7 +470,7 @@ export default function TeamPage() {
                 throw new Error('Código do estabelecimento não encontrado.')
             }
 
-            // 3. Criar usuário no auth
+            // Criar usuário no auth
             console.log('👤 Criando usuário no auth...')
             const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
                 email: newConsultantForm.email,
@@ -437,10 +489,10 @@ export default function TeamPage() {
             const newUserId = signUpData.user.id
             console.log('✅ Usuário criado no auth:', newUserId)
 
-            // 4. Aguardar propagação
+            // Aguardar propagação
             await new Promise(resolve => setTimeout(resolve, 2000))
 
-            // 5. Criar perfil
+            // Criar perfil
             const { error: profileError } = await supabase
                 .from('users')
                 .insert({
@@ -472,7 +524,7 @@ export default function TeamPage() {
                 }
             }
 
-            // 6. Associar à clínica
+            // Associar à clínica
             const { error: clinicAssocError } = await supabase
                 .from('user_clinics')
                 .insert({
@@ -484,7 +536,7 @@ export default function TeamPage() {
                 throw clinicAssocError
             }
 
-            // 7. Criar hierarquia
+            // Criar hierarquia
             const { error: hierarchyError } = await supabase
                 .from('hierarchies')
                 .insert({
@@ -498,7 +550,7 @@ export default function TeamPage() {
                 toast.error('Consultor criado, mas não foi vinculado à sua equipe')
             }
 
-            // 8. Vincular ao estabelecimento
+            // Vincular ao estabelecimento
             const { error: establishmentError } = await supabase
                 .from('user_establishments')
                 .insert({
@@ -567,7 +619,6 @@ export default function TeamPage() {
         }
     }
 
-    // 🔥 NOVAS FUNÇÕES: Para abrir e fechar modal de detalhes
     const handleViewConsultant = (consultantId: string) => {
         console.log('👁️ Abrindo detalhes do consultor:', consultantId)
         setSelectedConsultantId(consultantId)
@@ -716,8 +767,9 @@ export default function TeamPage() {
                 </div>
             </div>
 
-            {/* Team Stats */}
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-7">
+            {/* 🔥 NOVOS STATS CARDS SEGREGADOS */}
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Card da Equipe */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -727,15 +779,98 @@ export default function TeamPage() {
                         <div className="flex items-center">
                             <div className="flex-shrink-0">
                                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                                    <span className="text-sm font-bold text-primary-600">{teamStats.totalMembers}</span>
+                                    <UserGroupIcon className="w-4 h-4 text-primary-600" />
                                 </div>
                             </div>
                             <div className="ml-3">
-                                <p className="text-xs font-medium text-secondary-500">Membros</p>
-                                <p className="text-xs font-bold text-primary-600">
-                                    R$ {teamStats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                                <p className="text-xs font-medium text-secondary-500">Equipe</p>
+                                <p className="text-sm font-bold text-primary-600">
+                                    {teamStats.totalMembers} membros
                                 </p>
-                                <p className="text-xs text-secondary-400">Comissões</p>
+                                <p className="text-xs text-secondary-400">
+                                    {teamStats.activeMembers} ativos
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+
+                {/* Card Performance Geral */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.1 }}
+                    className="card"
+                >
+                    <div className="card-body">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                                    <TrophyIcon className="w-4 h-4 text-success-600" />
+                                </div>
+                            </div>
+                            <div className="ml-3">
+                                <p className="text-xs font-medium text-secondary-500">Performance</p>
+                                <p className="text-sm font-bold text-success-600">
+                                    {teamStats.totalConversions}/{teamStats.totalLeads}
+                                </p>
+                                <p className="text-xs text-secondary-400">
+                                    {teamStats.teamConversionRate.toFixed(1)}% conversão
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+
+                {/* Card Comissões da Equipe (Consultores) */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 }}
+                    className="card"
+                >
+                    <div className="card-body">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                    <CurrencyDollarIcon className="w-4 h-4 text-blue-600" />
+                                </div>
+                            </div>
+                            <div className="ml-3">
+                                <p className="text-xs font-medium text-secondary-500">Comissões Equipe</p>
+                                <p className="text-sm font-bold text-blue-600">
+                                    R$ {teamStats.teamPaidCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                                </p>
+                                <p className="text-xs text-secondary-400">
+                                    R$ {teamStats.teamPendingCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} pendente
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+
+                {/* Card Comissões do Gerente */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 }}
+                    className="card"
+                >
+                    <div className="card-body">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                                    <CurrencyDollarIcon className="w-4 h-4 text-green-600" />
+                                </div>
+                            </div>
+                            <div className="ml-3">
+                                <p className="text-xs font-medium text-secondary-500">Minhas Comissões</p>
+                                <p className="text-sm font-bold text-green-600">
+                                    R$ {teamStats.managerPaidCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                                </p>
+                                <p className="text-xs text-secondary-400">
+                                    R$ {teamStats.managerPendingCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} pendente
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -976,7 +1111,6 @@ export default function TeamPage() {
                                         </td>
                                         <td>
                                             <div className="flex items-center space-x-2">
-                                                {/* 🔥 BOTÃO CORRIGIDO: Agora chama a função correta */}
                                                 <button
                                                     onClick={() => handleViewConsultant(member.id)}
                                                     className="btn btn-ghost btn-sm"
@@ -1028,7 +1162,7 @@ export default function TeamPage() {
                 </div>
             </motion.div>
 
-            {/* 🔥 NOVO: Modal de Detalhes do Consultor */}
+            {/* Modal de Detalhes do Consultor */}
             <ConsultantDetailModal
                 isOpen={isDetailModalOpen}
                 onClose={handleCloseDetailModal}
