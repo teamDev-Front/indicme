@@ -1086,7 +1086,7 @@ export default function EstablishmentsPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="text-center">
+                      <div className="text-start">
                         <div className="text-sm font-medium text-success-600">
                           R$ {(establishment._stats?.total_commissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                         </div>
@@ -1099,7 +1099,7 @@ export default function EstablishmentsPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="text-center space-y-1">
+                      <div className="text-start space-y-1">
                         <div>
                           <div className="text-sm font-medium text-primary-600">
                             R$ {(establishment._stats?.consultant_commissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
