@@ -111,28 +111,28 @@ export default function CommissionsPage() {
       let query = supabase
         .from('commissions')
         .select(`
-        *,
-        leads!commissions_lead_id_fkey (
-          id,
-          full_name,
-          phone,
-          status,
-          arcadas_vendidas,
-          establishment_code,
-          created_at,
-          converted_at
-        ),
-        users!commissions_user_id_fkey (
-          id,
-          full_name,
-          email,
-          role
-        ),
-        establishment_codes!left (
-          code,
-          name
-        )
-      `)
+      *,
+      leads!commissions_lead_id_fkey (
+        id,
+        full_name,
+        phone,
+        status,
+        arcadas_vendidas,
+        establishment_code,
+        created_at,
+        converted_at
+      ),
+      users!commissions_user_id_fkey (
+        id,
+        full_name,
+        email,
+        role
+      ),
+      establishment_codes!left (
+        code,
+        name
+      )
+    `)
         .eq('clinic_id', userClinic.clinic_id)
         .order('created_at', { ascending: false })
 
@@ -232,8 +232,16 @@ export default function CommissionsPage() {
         new Date(c.created_at) >= firstDayOfMonth && c.status === 'paid'
       ).reduce((sum, c) => sum + (c.amount || 0), 0)
 
-      // Calcular total de arcadas
-      const totalArcadas = uniqueCommissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)
+      // 🔥 CORREÇÃO: Contar arcadas apenas uma vez por lead (evitar duplicação)
+      const leadsUnicos = new Set()
+      const totalArcadasReais = uniqueCommissions.reduce((sum, commission) => {
+        // Só contar arcadas uma vez por lead
+        if (!leadsUnicos.has(commission.lead_id)) {
+          leadsUnicos.add(commission.lead_id)
+          return sum + (commission.arcadas_vendidas || 1)
+        }
+        return sum
+      }, 0)
 
       // Calcular taxa de conversão baseada nos leads vinculados
       const leadsComComissao = uniqueCommissions.filter(c => c.leads).length
@@ -248,14 +256,15 @@ export default function CommissionsPage() {
         averageCommission: uniqueCommissions.length > 0 ? totalCommissions / uniqueCommissions.length : 0,
         monthlyEarnings: monthlyCommissions,
         conversionRate: conversionRate,
-        totalArcadas: totalArcadas
+        totalArcadas: totalArcadasReais // 🔥 USAR CONTAGEM CORRETA SEM DUPLICAÇÃO
       })
 
       console.log('✅ Stats calculadas:', {
         total: uniqueCommissions.length,
         totalPaid: paidCommissions,
         totalPending: pendingCommissions,
-        totalArcadas: totalArcadas
+        totalArcadas: totalArcadasReais, // 🔥 MOSTRAR VALOR CORRIGIDO NO LOG
+        totalArcadasAntes: uniqueCommissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0) // Debug
       })
 
     } catch (error: any) {

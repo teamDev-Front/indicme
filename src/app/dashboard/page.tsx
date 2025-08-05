@@ -132,7 +132,8 @@ export default function DashboardPage() {
     }
   }, [profile?.id, fetchDashboardData])
 
-  const calculateRealRevenue = async (leads: any[], supabase: any) => {
+  // Função calculateRealRevenue COMPLETA e CORRIGIDA para DashboardPage
+  const calculateRealRevenue = async (leads: any[], supabase: any, filterType?: 'consultant' | 'manager' | 'all') => {
     try {
       // Agrupar leads convertidos por establishment_code
       const leadsByEstablishment = leads
@@ -155,10 +156,10 @@ export default function DashboardPage() {
       // Buscar configurações de cada estabelecimento
       for (const establishmentCode of establishmentCodes) {
         try {
-          // 🔥 NOVO: Buscar AMBAS as configurações
+          // 🔥 BUSCAR AMBAS as configurações
           const { data: settings, error } = await supabase
             .from('establishment_commissions')
-            .select('consultant_value_per_arcada, manager_value_per_arcada')
+            .select('consultant_value_per_arcada, manager_value_per_arcada, consultant_active, manager_bonus_active')
             .eq('establishment_code', establishmentCode)
             .single()
 
@@ -167,8 +168,11 @@ export default function DashboardPage() {
             continue
           }
 
+          // 🔥 VALORES CORRETOS: Usar configurações específicas do estabelecimento
           const consultantValuePerArcada = settings?.consultant_value_per_arcada || 750
           const managerValuePerArcada = settings?.manager_value_per_arcada || consultantValuePerArcada || 750
+          const consultantActive = settings?.consultant_active !== false // Padrão ativo se não existir
+          const managerBonusActive = settings?.manager_bonus_active !== false
 
           if (consultantValuePerArcada === 0 && managerValuePerArcada === 0) {
             console.warn(`⚠️ Configuração não encontrada para estabelecimento: ${establishmentCode}`)
@@ -179,15 +183,23 @@ export default function DashboardPage() {
           const arcadasEstabelecimento = leadsByEstablishment[establishmentCode]
             .reduce((sum: any, lead: any) => sum + (lead.arcadas_vendidas || 1), 0)
 
-          // 🔥 NOVO: Calcular receita separada por tipo
-          const consultantRevenueEst = arcadasEstabelecimento * consultantValuePerArcada
-          const managerRevenueEst = arcadasEstabelecimento * managerValuePerArcada
+          // 🔥 NOVO: Calcular receita separada por tipo, respeitando configurações
+          let consultantRevenueEst = 0
+          let managerRevenueEst = 0
+
+          // Receita do consultor (apenas se estiver ativo)
+          if (consultantActive) {
+            consultantRevenueEst = arcadasEstabelecimento * consultantValuePerArcada
+          }
+
+          // Receita do gerente (sempre calcular, mas pode ser 0 se não houver gerentes)
+          managerRevenueEst = arcadasEstabelecimento * managerValuePerArcada
 
           totalConsultantRevenue += consultantRevenueEst
           totalManagerRevenue += managerRevenueEst
 
           console.log(`💰 ${establishmentCode}: ${arcadasEstabelecimento} arcadas`)
-          console.log(`   - Consultores: R$ ${consultantRevenueEst.toLocaleString('pt-BR')} (R$ ${consultantValuePerArcada}/arcada)`)
+          console.log(`   - Consultores: R$ ${consultantRevenueEst.toLocaleString('pt-BR')} (R$ ${consultantValuePerArcada}/arcada) ${consultantActive ? '✅' : '❌ INATIVO'}`)
           console.log(`   - Gerentes: R$ ${managerRevenueEst.toLocaleString('pt-BR')} (R$ ${managerValuePerArcada}/arcada)`)
 
         } catch (estError) {
@@ -205,7 +217,7 @@ export default function DashboardPage() {
 
         const { data: fallbackSettings } = await supabase
           .from('establishment_commissions')
-          .select('consultant_value_per_arcada, manager_value_per_arcada')
+          .select('consultant_value_per_arcada, manager_value_per_arcada, consultant_active')
           .limit(1)
           .single()
 
@@ -215,8 +227,11 @@ export default function DashboardPage() {
 
           const fallbackConsultant = fallbackSettings.consultant_value_per_arcada || 750
           const fallbackManager = fallbackSettings.manager_value_per_arcada || fallbackConsultant
+          const fallbackConsultantActive = fallbackSettings.consultant_active !== false
 
-          totalConsultantRevenue += arcadasSemEstab * fallbackConsultant
+          if (fallbackConsultantActive) {
+            totalConsultantRevenue += arcadasSemEstab * fallbackConsultant
+          }
           totalManagerRevenue += arcadasSemEstab * fallbackManager
 
           console.log(`📝 Fallback: ${arcadasSemEstab} arcadas × R$ ${fallbackConsultant + fallbackManager}`)
@@ -230,11 +245,28 @@ export default function DashboardPage() {
       console.log(`   - Gerentes: R$ ${totalManagerRevenue.toLocaleString('pt-BR')}`)
       console.log(`   - TOTAL: R$ ${totalRevenue.toLocaleString('pt-BR')}`)
 
-      // 🔥 NOVO: Retornar objeto com breakdown
-      return {
-        total: totalRevenue,
-        consultant: totalConsultantRevenue,
-        manager: totalManagerRevenue
+      // 🔥 NOVO: Aplicar filtro baseado no tipo de usuário
+      if (filterType === 'consultant') {
+        // Para consultor, retornar apenas a receita de consultor
+        return {
+          total: totalConsultantRevenue,
+          consultant: totalConsultantRevenue,
+          manager: 0 // Não mostrar receita de gerente para consultor
+        }
+      } else if (filterType === 'manager') {
+        // Para gerente, mostrar ambos
+        return {
+          total: totalConsultantRevenue + totalManagerRevenue,
+          consultant: totalConsultantRevenue,
+          manager: totalManagerRevenue
+        }
+      } else {
+        // Para admin, mostrar tudo
+        return {
+          total: totalConsultantRevenue + totalManagerRevenue,
+          consultant: totalConsultantRevenue,
+          manager: totalManagerRevenue
+        }
       }
 
     } catch (error) {
@@ -307,7 +339,7 @@ export default function DashboardPage() {
         ?.reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0) || 0
 
       // 5. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
-      const revenueData = await calculateRealRevenue(allLeads || [], supabase)
+      const revenueData = await calculateRealRevenue(allLeads || [], supabase, 'all')
 
       // 6. Buscar comissões da clínica
       const { data: commissions, error: commissionsError } = await supabase
@@ -477,7 +509,8 @@ export default function DashboardPage() {
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
       // 5. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
-      const revenueData = await calculateRealRevenue(teamLeads, supabase)
+      const revenueData = await calculateRealRevenue(teamLeads, supabase, 'manager')
+
 
       // 6. Buscar comissões da equipe
       const { data: teamCommissions } = await supabase
@@ -585,21 +618,21 @@ export default function DashboardPage() {
         .reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
 
       // 3. 🔥 NOVO: Calcular receita completa (consultores + gerentes)
-      const revenueData = await calculateRealRevenue(leads, supabase)
+      const revenueData = await calculateRealRevenue(leads, supabase, 'consultant')
+
 
       // 4. Buscar comissões do consultor
       const { data: consultantCommissions } = await supabase
         .from('commissions')
         .select('amount, status, type')
         .eq('user_id', profile?.id)
+        .eq('type', 'consultant') // 🔥 FILTRAR APENAS CONSULTOR
 
       const totalCommissions = consultantCommissions?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
-      const paidCommissions = consultantCommissions
-        ?.filter(c => c.status === 'paid')
-        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
-      const pendingCommissions = consultantCommissions
-        ?.filter(c => c.status === 'pending')
-        ?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const paidCommissions = consultantCommissions?.filter(c => c.status === 'paid')
+        .reduce((sum, c) => sum + (c.amount || 0), 0) || 0
+      const pendingCommissions = consultantCommissions?.filter(c => c.status === 'pending')
+        .reduce((sum, c) => sum + (c.amount || 0), 0) || 0
 
       // 5. Dados do mês atual
       const startOfMonth = new Date()
@@ -1049,29 +1082,43 @@ export default function DashboardPage() {
               </div>
               <div className="ml-4 flex-1">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-secondary-500">Comissões Totais</p>
+                  <p className="text-xs font-medium text-secondary-500">
+                    {profile?.role === 'consultant' ? 'Minhas Comissões' : 'Comissões Totais'}
+                  </p>
                   <span className="text-xs text-secondary-400">
                     {stats.totalArcadas} arcadas
                   </span>
                 </div>
                 <p className="text-2xl font-bold text-secondary-900">
-                  R$ {stats.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                  R$ {(profile?.role === 'consultant' ? stats.consultantRevenue : stats.totalRevenue)
+                    .toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                 </p>
 
                 {/* 🔥 NOVO: Breakdown detalhado */}
-                <div className="text-xs text-secondary-500 space-y-0.5 mt-1">
-                  <div className="flex justify-between">
-                    <span>Consultores:</span>
-                    <span className="font-medium">R$ {stats.consultantRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                {profile?.role !== 'consultant' && (
+                  <div className="text-xs text-secondary-500 space-y-0.5 mt-1">
+                    <div className="flex justify-between">
+                      <span>Consultores:</span>
+                      <span className="font-medium">R$ {stats.consultantRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Gerentes:</span>
+                      <span className="font-medium">R$ {stats.managerRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                    </div>
+                    <div className="text-xs text-secondary-400 mt-1">
+                      Baseado nas arcadas convertidas
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Gerentes:</span>
-                    <span className="font-medium">R$ {stats.managerRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span>
+                )}
+
+                {profile?.role === 'consultant' && (
+                  <div className="text-xs text-secondary-500 mt-1">
+                    <div className="text-xs text-secondary-400">
+                      Suas comissões como consultor
+                    </div>
                   </div>
-                  <div className="text-xs text-secondary-400 mt-1">
-                    Baseado nas arcadas convertidas
-                  </div>
-                </div>
+                )}
+
               </div>
             </div>
           </div>
@@ -1108,13 +1155,14 @@ export default function DashboardPage() {
             </div>
           </div>
         </motion.div>
-      </div>
+      </div >
 
       {/* Quick Actions & Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      < div className="grid grid-cols-1 lg:grid-cols-3 gap-6" >
         {/* Quick Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
+        < motion.div
+          initial={{ opacity: 0, y: 20 }
+          }
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
           className="card"
@@ -1138,10 +1186,10 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
-        </motion.div>
+        </motion.div >
 
         {/* Recent Activity */}
-        <motion.div
+        < motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
@@ -1200,13 +1248,14 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-        </motion.div>
-      </div>
+        </motion.div >
+      </div >
 
       {/* Top Performers & Additional Stats */}
-      {(profile?.role === 'clinic_admin' || profile?.role === 'manager') && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* <motion.div
+      {
+        (profile?.role === 'clinic_admin' || profile?.role === 'manager') && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6 }}
@@ -1260,117 +1309,120 @@ export default function DashboardPage() {
             </div>
           </motion.div> */}
 
-          {/* Additional Stats */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="card"
-          >
-            <div className="card-header">
-              <h3 className="text-lg font-medium text-secondary-900">Estatísticas Gerais</h3>
-            </div>
-            <div className="card-body">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <UserGroupIcon className="h-5 w-5 text-primary-500" />
-                    <span className="text-sm font-medium text-secondary-700">
-                      Consultores Ativos
-                    </span>
-                  </div>
-                  <span className="text-sm font-bold text-secondary-900">
-                    {stats.activeConsultants}
-                  </span>
-                </div>
-
-                {profile?.role === 'clinic_admin' && (
+            {/* Additional Stats */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.7 }}
+              className="card"
+            >
+              <div className="card-header">
+                <h3 className="text-lg font-medium text-secondary-900">Estatísticas Gerais</h3>
+              </div>
+              <div className="card-body">
+                <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
-                      <UsersIcon className="h-5 w-5 text-success-500" />
+                      <UserGroupIcon className="h-5 w-5 text-primary-500" />
                       <span className="text-sm font-medium text-secondary-700">
-                        Gerentes Ativos
+                        Consultores Ativos
                       </span>
                     </div>
                     <span className="text-sm font-bold text-secondary-900">
-                      {stats.activeManagers}
+                      {stats.activeConsultants}
                     </span>
                   </div>
-                )}
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <BuildingOfficeIcon className="h-5 w-5 text-warning-500" />
-                    <span className="text-sm font-medium text-secondary-700">
-                      Estabelecimentos
+                  {profile?.role === 'clinic_admin' && (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <UsersIcon className="h-5 w-5 text-success-500" />
+                        <span className="text-sm font-medium text-secondary-700">
+                          Gerentes Ativos
+                        </span>
+                      </div>
+                      <span className="text-sm font-bold text-secondary-900">
+                        {stats.activeManagers}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <BuildingOfficeIcon className="h-5 w-5 text-warning-500" />
+                      <span className="text-sm font-medium text-secondary-700">
+                        Estabelecimentos
+                      </span>
+                    </div>
+                    <span className="text-sm font-bold text-secondary-900">
+                      {stats.establishmentCount}
                     </span>
                   </div>
-                  <span className="text-sm font-bold text-secondary-900">
-                    {stats.establishmentCount}
-                  </span>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <ClockIcon className="h-5 w-5 text-secondary-500" />
+                      <span className="text-sm font-medium text-secondary-700">
+                        Leads Pendentes
+                      </span>
+                    </div>
+                    <span className="text-sm font-bold text-secondary-900">
+                      {stats.pendingLeads}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <TrophyIcon className="h-5 w-5 text-purple-500" />
+                      <span className="text-sm font-medium text-secondary-700">
+                        Total Arcadas
+                      </span>
+                    </div>
+                    <span className="text-sm font-bold text-secondary-900">
+                      {stats.totalArcadas}
+                    </span>
+                  </div>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )
+      }
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <ClockIcon className="h-5 w-5 text-secondary-500" />
-                    <span className="text-sm font-medium text-secondary-700">
-                      Leads Pendentes
-                    </span>
+      {/* Debug Info (apenas em desenvolvimento) */}
+      {
+        process.env.NODE_ENV === 'development' && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.8 }}
+            className="card bg-blue-50 border-blue-200"
+          >
+            <div className="card-header">
+              <h3 className="text-lg font-medium text-blue-900">Debug Info</h3>
+            </div>
+            <div className="card-body">
+              <div className="text-xs text-blue-700 space-y-2">
+                <div><strong>User Role:</strong> {profile?.role}</div>
+                <div><strong>User ID:</strong> {profile?.id}</div>
+                <div><strong>Loading:</strong> {loading.toString()}</div>
+                <div><strong>Error:</strong> {error || 'None'}</div>
+                <div><strong>Recent Activities:</strong> {recentActivity.length}</div>
+                <div><strong>Top Performers:</strong> {topPerformers.length}</div>
+                <div className="mt-2">
+                  <strong>Stats Summary:</strong>
+                  <div className="ml-2">
+                    <div>Total Leads: {stats.totalLeads}</div>
+                    <div>Converted: {stats.convertedLeads}</div>
+                    <div>Revenue: R$ {stats.totalRevenue.toLocaleString('pt-BR')}</div>
+                    <div>Commissions: R$ {stats.totalCommissions.toLocaleString('pt-BR')}</div>
                   </div>
-                  <span className="text-sm font-bold text-secondary-900">
-                    {stats.pendingLeads}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <TrophyIcon className="h-5 w-5 text-purple-500" />
-                    <span className="text-sm font-medium text-secondary-700">
-                      Total Arcadas
-                    </span>
-                  </div>
-                  <span className="text-sm font-bold text-secondary-900">
-                    {stats.totalArcadas}
-                  </span>
                 </div>
               </div>
             </div>
           </motion.div>
-        </div>
-      )}
-
-      {/* Debug Info (apenas em desenvolvimento) */}
-      {process.env.NODE_ENV === 'development' && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.8 }}
-          className="card bg-blue-50 border-blue-200"
-        >
-          <div className="card-header">
-            <h3 className="text-lg font-medium text-blue-900">Debug Info</h3>
-          </div>
-          <div className="card-body">
-            <div className="text-xs text-blue-700 space-y-2">
-              <div><strong>User Role:</strong> {profile?.role}</div>
-              <div><strong>User ID:</strong> {profile?.id}</div>
-              <div><strong>Loading:</strong> {loading.toString()}</div>
-              <div><strong>Error:</strong> {error || 'None'}</div>
-              <div><strong>Recent Activities:</strong> {recentActivity.length}</div>
-              <div><strong>Top Performers:</strong> {topPerformers.length}</div>
-              <div className="mt-2">
-                <strong>Stats Summary:</strong>
-                <div className="ml-2">
-                  <div>Total Leads: {stats.totalLeads}</div>
-                  <div>Converted: {stats.convertedLeads}</div>
-                  <div>Revenue: R$ {stats.totalRevenue.toLocaleString('pt-BR')}</div>
-                  <div>Commissions: R$ {stats.totalCommissions.toLocaleString('pt-BR')}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </div>
+        )
+      }
+    </div >
   )
 }

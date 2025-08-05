@@ -299,7 +299,7 @@ export default function CommissionSettingsModal({
                               <CurrencyDollarIcon className="h-5 w-5 mr-2" />
                               Comissões do Consultor
                             </h4>
-                            
+
                             {/* 🔥 NOVO: Toggle para ativar/desativar comissões do consultor */}
                             <div className="flex items-center space-x-2">
                               <span className="text-sm text-blue-700">Ativo:</span>
@@ -309,14 +309,12 @@ export default function CommissionSettingsModal({
                                   ...prev,
                                   consultant_active: !prev.consultant_active
                                 }))}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                  settings.consultant_active ? 'bg-blue-600' : 'bg-gray-300'
-                                }`}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.consultant_active ? 'bg-blue-600' : 'bg-gray-300'
+                                  }`}
                               >
                                 <span
-                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                    settings.consultant_active ? 'translate-x-6' : 'translate-x-1'
-                                  }`}
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.consultant_active ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
                                 />
                               </button>
                               <span className="text-sm font-medium text-blue-700">
@@ -409,7 +407,7 @@ export default function CommissionSettingsModal({
                               <CurrencyDollarIcon className="h-5 w-5 mr-2" />
                               Comissões do Gerente
                             </h4>
-                            
+
                             {/* Toggle para ativar/desativar bônus */}
                             <div className="flex items-center space-x-2">
                               <span className="text-sm text-green-700">Bônus:</span>
@@ -419,14 +417,12 @@ export default function CommissionSettingsModal({
                                   ...prev,
                                   manager_bonus_active: !prev.manager_bonus_active
                                 }))}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                  settings.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
-                                }`}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.manager_bonus_active ? 'bg-green-600' : 'bg-gray-300'
+                                  }`}
                               >
                                 <span
-                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                    settings.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
-                                  }`}
+                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.manager_bonus_active ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
                                 />
                               </button>
                               <span className="text-sm font-medium text-green-700">
@@ -595,13 +591,13 @@ export default function CommissionSettingsModal({
                               <div className="flex justify-between text-xs">
                                 <span className="text-green-600">@ R$ {settings.manager_value_per_arcada}/arcada</span>
                                 <span className="text-green-600">
-                                  {settings.consultant_active && settings.manager_value_per_arcada === settings.consultant_value_per_arcada ? 
-                                    '(mesmo valor que consultor)' : 
+                                  {settings.consultant_active && settings.manager_value_per_arcada === settings.consultant_value_per_arcada ?
+                                    '(mesmo valor que consultor)' :
                                     settings.consultant_active ? '(valor diferente do consultor)' : '(consultor inativo)'
                                   }
                                 </span>
                               </div>
-                              
+
                               {settings.manager_bonus_active && (
                                 <>
                                   {managerPreview.bonus35 > 0 && (
@@ -624,7 +620,7 @@ export default function CommissionSettingsModal({
                                   )}
                                 </>
                               )}
-                              
+
                               <hr className="border-green-300" />
                               <div className="flex justify-between text-lg font-bold text-green-900">
                                 <span>Total Gerente:</span>
@@ -654,8 +650,8 @@ export default function CommissionSettingsModal({
                             <div className="flex items-center">
                               <span className={`inline-block w-3 h-3 rounded-full mr-2 ${settings.consultant_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
                               <span>
-                                Consultor: {settings.consultant_active ? 
-                                  `R$ ${settings.consultant_value_per_arcada}/arcada + bônus a cada ${settings.consultant_bonus_every_arcadas} arcadas` : 
+                                Consultor: {settings.consultant_active ?
+                                  `R$ ${settings.consultant_value_per_arcada}/arcada + bônus a cada ${settings.consultant_bonus_every_arcadas} arcadas` :
                                   'INATIVO - sem comissões'
                                 }
                               </span>
@@ -663,22 +659,45 @@ export default function CommissionSettingsModal({
                             <div className="flex items-center">
                               <span className="inline-block w-3 h-3 rounded-full bg-green-500 mr-2"></span>
                               <span>
-                                Gerente: R$ {settings.manager_value_per_arcada}/arcada da equipe 
-                                {settings.manager_bonus_active ? 
-                                  ' + marcos em 35, 50 e 75 arcadas' : 
+                                Gerente: R$ {settings.manager_value_per_arcada}/arcada da equipe
+                                {settings.manager_bonus_active ?
+                                  ' + marcos em 35, 50 e 75 arcadas' :
                                   ' (sem bônus)'
                                 }
                               </span>
                             </div>
                             {settings.manager_bonus_active && (
                               <div>• Próximo marco gerente: {
-                                previewArcadas < 35 ? `${35 - previewArcadas} arcadas para 1º bônus` :
-                                  previewArcadas < 50 ? `${50 - previewArcadas} arcadas para 2º bônus` :
-                                    previewArcadas < 75 ? `${75 - previewArcadas} arcadas para 3º bônus` :
-                                      'Todos os marcos atingidos!'
+                                (() => {
+                                  // Calcular quantos marcos cada nível já foi atingido
+                                  const marcos35 = Math.floor(previewArcadas / 35)
+                                  const marcos50 = Math.floor(previewArcadas / 50)
+                                  const marcos75 = Math.floor(previewArcadas / 75)
+
+                                  // Calcular próximo marco baseado no ciclo atual
+                                  const proximoMarco35 = 35 - (previewArcadas % 35)
+                                  const proximoMarco50 = 50 - (previewArcadas % 50)
+                                  const proximoMarco75 = 75 - (previewArcadas % 75)
+
+                                  // Determinar qual é o próximo marco mais próximo
+                                  const proximosMarcos = []
+                                  if (proximoMarco35 !== 35) proximosMarcos.push({ tipo: '35 arcadas', faltam: proximoMarco35 })
+                                  if (proximoMarco50 !== 50) proximosMarcos.push({ tipo: '50 arcadas', faltam: proximoMarco50 })
+                                  if (proximoMarco75 !== 75) proximosMarcos.push({ tipo: '75 arcadas', faltam: proximoMarco75 })
+
+                                  if (proximosMarcos.length === 0) {
+                                    return 'Todos os marcos zerados! Próximo: 35 arcadas'
+                                  }
+
+                                  // Encontrar o marco mais próximo
+                                  const menorDistancia = Math.min(...proximosMarcos.map(m => m.faltam))
+                                  const proximoMarcoPrincipal = proximosMarcos.find(m => m.faltam === menorDistancia)
+
+                                  return `${menorDistancia} arcadas para próximo bônus de ${proximoMarcoPrincipal?.tipo}`
+                                })()
                               }</div>
                             )}
-                            
+
                             {/* 🔥 NOVO: Alerta se consultor estiver inativo */}
                             {!settings.consultant_active && (
                               <div className="mt-3 p-2 bg-red-100 border border-red-200 rounded">
