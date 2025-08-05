@@ -63,13 +63,34 @@ export default function CommissionSettingsModal({
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [previewArcadas, setPreviewArcadas] = useState(10)
+  const [realArcadas, setRealArcadas] = useState(0) // 🔥 NOVO: Arcadas reais do estabelecimento
   const supabase = createClient()
 
   useEffect(() => {
     if (isOpen && establishmentCode) {
       fetchExistingSettings()
+      fetchRealArcadas() // 🔥 NOVO: Buscar arcadas reais
     }
   }, [isOpen, establishmentCode])
+
+  // 🔥 NOVA FUNÇÃO: Buscar arcadas reais já convertidas
+  const fetchRealArcadas = async () => {
+    try {
+      // Buscar total de arcadas já convertidas neste estabelecimento
+      const { data: leadsConvertidos } = await supabase
+        .from('leads')
+        .select('arcadas_vendidas')
+        .eq('establishment_code', establishmentCode)
+        .eq('status', 'converted')
+
+      const totalArcadas = leadsConvertidos?.reduce((sum, lead) => sum + (lead.arcadas_vendidas || 1), 0) || 0
+      setRealArcadas(totalArcadas)
+      console.log(`✅ Arcadas reais do estabelecimento ${establishmentCode}:`, totalArcadas)
+    } catch (error) {
+      console.error('Erro ao buscar arcadas reais:', error)
+      setRealArcadas(0)
+    }
+  }
 
   const fetchExistingSettings = async () => {
     try {
@@ -643,9 +664,9 @@ export default function CommissionSettingsModal({
                           </div>
                         </div>
 
-                        {/* 🔥 ATUALIZADO: Marcos de Referência com status dos toggles */}
+                        {/* 🔥 CORRIGIDO: Marcos de Referência com dados REAIS */}
                         <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
-                          <h5 className="font-medium text-warning-900 mb-3">Configuração Atual</h5>
+                          <h5 className="font-medium text-warning-900 mb-3">Status Atual do Estabelecimento</h5>
                           <div className="space-y-2 text-sm text-warning-700">
                             <div className="flex items-center">
                               <span className={`inline-block w-3 h-3 rounded-full mr-2 ${settings.consultant_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
@@ -666,37 +687,42 @@ export default function CommissionSettingsModal({
                                 }
                               </span>
                             </div>
-                            {settings.manager_bonus_active && (
-                              <div>• Próximo marco gerente: {
-                                (() => {
-                                  // Calcular quantos marcos cada nível já foi atingido
-                                  const marcos35 = Math.floor(previewArcadas / 35)
-                                  const marcos50 = Math.floor(previewArcadas / 50)
-                                  const marcos75 = Math.floor(previewArcadas / 75)
+                            
+                            {/* 🔥 CORRIGIDO: Mostrar dados REAIS em vez do simulador */}
+                            <div className="mt-3 p-2 bg-blue-100 border border-blue-200 rounded">
+                              <p className="text-blue-800 text-xs font-medium">
+                                📊 Arcadas já convertidas: {realArcadas}
+                              </p>
+                              {settings.manager_bonus_active && (
+                                <div className="text-blue-700 text-xs mt-1">• Próximo marco gerente: {
+                                  (() => {
+                                    // 🔥 CORRIGIDO: Usar arcadas reais em vez do simulador
+                                    const arcadasReais = realArcadas
+                                    
+                                    // Calcular próximo marco baseado no ciclo atual
+                                    const proximoMarco35 = 35 - (arcadasReais % 35)
+                                    const proximoMarco50 = 50 - (arcadasReais % 50)
+                                    const proximoMarco75 = 75 - (arcadasReais % 75)
 
-                                  // Calcular próximo marco baseado no ciclo atual
-                                  const proximoMarco35 = 35 - (previewArcadas % 35)
-                                  const proximoMarco50 = 50 - (previewArcadas % 50)
-                                  const proximoMarco75 = 75 - (previewArcadas % 75)
+                                    // Determinar qual é o próximo marco mais próximo
+                                    const proximosMarcos = []
+                                    if (proximoMarco35 !== 35) proximosMarcos.push({ tipo: '35 arcadas', faltam: proximoMarco35 })
+                                    if (proximoMarco50 !== 50) proximosMarcos.push({ tipo: '50 arcadas', faltam: proximoMarco50 })
+                                    if (proximoMarco75 !== 75) proximosMarcos.push({ tipo: '75 arcadas', faltam: proximoMarco75 })
 
-                                  // Determinar qual é o próximo marco mais próximo
-                                  const proximosMarcos = []
-                                  if (proximoMarco35 !== 35) proximosMarcos.push({ tipo: '35 arcadas', faltam: proximoMarco35 })
-                                  if (proximoMarco50 !== 50) proximosMarcos.push({ tipo: '50 arcadas', faltam: proximoMarco50 })
-                                  if (proximoMarco75 !== 75) proximosMarcos.push({ tipo: '75 arcadas', faltam: proximoMarco75 })
+                                    if (proximosMarcos.length === 0) {
+                                      return `${arcadasReais} arcadas no total. Próximo: 35 arcadas`
+                                    }
 
-                                  if (proximosMarcos.length === 0) {
-                                    return 'Todos os marcos zerados! Próximo: 35 arcadas'
-                                  }
+                                    // Encontrar o marco mais próximo
+                                    const menorDistancia = Math.min(...proximosMarcos.map(m => m.faltam))
+                                    const proximoMarcoPrincipal = proximosMarcos.find(m => m.faltam === menorDistancia)
 
-                                  // Encontrar o marco mais próximo
-                                  const menorDistancia = Math.min(...proximosMarcos.map(m => m.faltam))
-                                  const proximoMarcoPrincipal = proximosMarcos.find(m => m.faltam === menorDistancia)
-
-                                  return `${menorDistancia} arcadas para próximo bônus de ${proximoMarcoPrincipal?.tipo}`
-                                })()
-                              }</div>
-                            )}
+                                    return `${menorDistancia} arcadas para próximo bônus de ${proximoMarcoPrincipal?.tipo} (atual: ${arcadasReais})`
+                                  })()
+                                }</div>
+                              )}
+                            </div>
 
                             {/* 🔥 NOVO: Alerta se consultor estiver inativo */}
                             {!settings.consultant_active && (

@@ -20,6 +20,16 @@ import {
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 
+const contarArcadasUnicas = (comissoesFiltradas: any[]) => {
+  const leadsUnicos = new Map()
+  comissoesFiltradas.forEach(c => {
+    if (c.lead_id && !leadsUnicos.has(c.lead_id)) {
+      leadsUnicos.set(c.lead_id, c.arcadas_vendidas || 1)
+    }
+  })
+  return Array.from(leadsUnicos.values()).reduce((sum, arcadas) => sum + arcadas, 0)
+}
+
 interface Commission {
   id: string
   amount: number
@@ -467,9 +477,9 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.totalPending.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
-                <p className="text-xs text-secondary-400">
-                  {commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
-                </p>
+                <div className="text-xs text-secondary-400">
+                  {contarArcadasUnicas(commissions.filter(c => c.status === 'pending'))} arcadas
+                </div>
               </div>
             </div>
           </div>
@@ -493,9 +503,9 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.totalPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
-                <p className="text-xs text-secondary-400">
-                  {commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
-                </p>
+                <div className="text-xs text-secondary-400">
+                  {contarArcadasUnicas(commissions.filter(c => c.status === 'paid'))} arcadas
+                </div>
               </div>
             </div>
           </div>
@@ -517,7 +527,7 @@ export default function CommissionsPage() {
               <div className="ml-3">
                 <p className="text-xs font-medium text-secondary-500">Total Arcadas</p>
                 <p className="text-sm font-bold text-secondary-900">
-                  {commissions.reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)}
+                  {stats.totalArcadas}  
                 </p>
                 <p className="text-xs text-secondary-400">
                   Vendidas no período
@@ -545,14 +555,14 @@ export default function CommissionsPage() {
                 <p className="text-sm font-bold text-secondary-900">
                   R$ {stats.monthlyEarnings.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
-                <p className="text-xs text-secondary-400">
-                  {commissions.filter(c => {
+                <div className="text-xs text-secondary-400">
+                  {contarArcadasUnicas(commissions.filter(c => {
                     const commissionDate = new Date(c.created_at)
                     const currentMonth = new Date()
                     return commissionDate.getMonth() === currentMonth.getMonth() &&
                       commissionDate.getFullYear() === currentMonth.getFullYear()
-                  }).reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
-                </p>
+                  }))} arcadas
+                </div>
               </div>
             </div>
           </div>
@@ -603,7 +613,7 @@ export default function CommissionsPage() {
                   R$ {stats.totalCancelled.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
                 <p className="text-xs text-secondary-400">
-                  {commissions.filter(c => c.status === 'cancelled').reduce((sum, c) => sum + (c.arcadas_vendidas || 1), 0)} arcadas
+                  {contarArcadasUnicas(commissions.filter(c => c.status === 'cancelled'))} arcadas
                 </p>
               </div>
             </div>
