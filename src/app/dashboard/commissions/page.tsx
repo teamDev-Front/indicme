@@ -873,8 +873,7 @@ export default function CommissionsPage() {
                       </td>
                     )}
 
-                    {/* 🔥 NOVO: Mostrar mensagem para usuários sem permissão */}
-                    {!canManageCommissions && profile?.role !== 'consultant' && (
+                    {/* {!canManageCommissions && profile?.role !== 'consultant' && (
                       <td>
                         <div className="text-xs text-secondary-400 text-center">
                           <span title="Apenas administradores da clínica podem gerenciar comissões">
@@ -882,7 +881,7 @@ export default function CommissionsPage() {
                           </span>
                         </div>
                       </td>
-                    )}
+                    )} */}
                   </tr>
                 ))}
               </tbody>
