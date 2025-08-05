@@ -43,12 +43,16 @@ interface EstablishmentCode {
   _stats?: {
     users_count: number
     leads_count: number
-    total_revenue: number
     total_commissions: number
+    consultant_commissions: number // 🔥 NOVO
+    manager_commissions: number    // 🔥 NOVO
     converted_leads: number
   }
   _commission_settings?: {
     consultant_value_per_arcada: number
+    consultant_bonus_every_arcadas?: number // 🔥 NOVO
+    consultant_bonus_value?: number        // 🔥 NOVO
+    manager_value_per_arcada?: number      // 🔥 NOVO
     manager_bonus_35_arcadas: number
     manager_bonus_50_arcadas: number
     manager_bonus_75_arcadas: number
@@ -187,12 +191,12 @@ export default function EstablishmentsPage() {
             // 3. Buscar comissões DE DUAS FORMAS também
             const { data: commissionsByCode, error: commissionsCodeError } = await supabase
               .from('commissions')
-              .select('id, amount, status, user_id')
+              .select('id, amount, status, user_id, type')
               .eq('establishment_code', establishment.code)
 
             const { data: commissionsByUsers, error: commissionsUsersError } = await supabase
               .from('commissions')
-              .select('id, amount, status, user_id, establishment_code')
+              .select('id, amount, status, user_id, establishment_code, type')
               .in('user_id', userIds.length > 0 ? userIds : ['00000000-0000-0000-0000-000000000000'])
 
             if (commissionsCodeError) {
@@ -242,18 +246,23 @@ export default function EstablishmentsPage() {
             // Usar configuração específica ou padrão
             const commissionSettings = settingsData || {
               consultant_value_per_arcada: 750,
+              consultant_bonus_every_arcadas: 7,     // 🔥 NOVO
+              consultant_bonus_value: 750,           // 🔥 NOVO
+              manager_value_per_arcada: 750,         // 🔥 NOVO
               manager_bonus_35_arcadas: 5000,
               manager_bonus_50_arcadas: 10000,
               manager_bonus_75_arcadas: 15000,
             }
 
-            // IMPORTANTE: Aqui você precisa definir o valor real do tratamento
-            // Por enquanto, vou usar o valor da comissão como proxy
-            // Mas idealmente deveria ser: totalArcadas * VALOR_REAL_DO_TRATAMENTO
-            const totalRevenue = totalArcadas * commissionSettings.consultant_value_per_arcada
-            const totalCommissions = combinedCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+            // 🔥 NOVA LÓGICA: Separar comissões por tipo
+            const consultantCommissions = combinedCommissions.filter(c => c.type === 'consultant' && c.status === 'paid')
+            const managerCommissions = combinedCommissions.filter(c => c.type === 'manager' && c.status === 'paid')
 
-            console.log(`💵 Revenue calculado: R$ ${totalRevenue}`)
+            const totalConsultantCommissions = consultantCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+            const totalManagerCommissions = managerCommissions.reduce((sum, c) => sum + (c.amount || 0), 0)
+            const totalCommissions = totalConsultantCommissions + totalManagerCommissions
+            console.log(`💵 Comissões consultores: R$ ${totalConsultantCommissions}`)
+            console.log(`💵 Comissões gerentes: R$ ${totalManagerCommissions}`)
             console.log(`💵 Comissões totais: R$ ${totalCommissions}`)
             console.log(`=====================================`)
 
@@ -262,8 +271,9 @@ export default function EstablishmentsPage() {
               _stats: {
                 users_count: usersCount || 0,
                 leads_count: combinedLeads.length,
-                total_revenue: totalRevenue,
                 total_commissions: totalCommissions,
+                consultant_commissions: totalConsultantCommissions,
+                manager_commissions: totalManagerCommissions,
                 converted_leads: convertedLeads.length,
               },
               _commission_settings: commissionSettings
@@ -277,12 +287,16 @@ export default function EstablishmentsPage() {
               _stats: {
                 users_count: 0,
                 leads_count: 0,
-                total_revenue: 0,
                 total_commissions: 0,
+                consultant_commissions: 0,
+                manager_commissions: 0,
                 converted_leads: 0,
               },
               _commission_settings: {
                 consultant_value_per_arcada: 750,
+                consultant_bonus_every_arcadas: 7,     // 🔥 NOVO
+                consultant_bonus_value: 750,           // 🔥 NOVO
+                manager_value_per_arcada: 750,         // 🔥 NOVO
                 manager_bonus_35_arcadas: 5000,
                 manager_bonus_50_arcadas: 10000,
                 manager_bonus_75_arcadas: 15000,
@@ -773,7 +787,7 @@ export default function EstablishmentsPage() {
     inactive: establishments.filter(e => !e.is_active).length,
     totalUsers: establishments.reduce((sum, e) => sum + (e._stats?.users_count || 0), 0),
     totalLeads: establishments.reduce((sum, e) => sum + (e._stats?.leads_count || 0), 0),
-    totalRevenue: establishments.reduce((sum, e) => sum + (e._stats?.total_revenue || 0), 0),
+    totalCommissions: establishments.reduce((sum, e) => sum + (e._stats?.total_commissions || 0), 0),
   }
 
   if (loading) {
@@ -917,9 +931,9 @@ export default function EstablishmentsPage() {
                 </div>
               </div>
               <div className="ml-3">
-                <p className="text-xs font-medium text-secondary-500">Receita</p>
+                <p className="text-xs font-medium text-secondary-500">Comissões</p>
                 <p className="text-xs font-bold text-warning-600">
-                  R$ {stats.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                  R$ {stats.totalCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                 </p>
               </div>
             </div>
@@ -1074,23 +1088,29 @@ export default function EstablishmentsPage() {
                     <td>
                       <div className="text-center">
                         <div className="text-sm font-medium text-success-600">
-                          R$ {(establishment._stats?.total_revenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                          R$ {(establishment._stats?.total_commissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
                         </div>
                         <div className="text-xs text-secondary-500">
-                          Total gerado
+                          Total gerado pela empresa
+                        </div>
+                        <div className="text-xs text-secondary-400 mt-1">
+                          (comissões pagas)
                         </div>
                       </div>
                     </td>
                     <td>
-                      <div className="text-center">
-                        <div className="text-sm font-medium text-warning-600">
-                          R$ {establishment._commission_settings?.consultant_value_per_arcada?.toLocaleString('pt-BR') || '750'}/arcada
+                      <div className="text-center space-y-1">
+                        <div>
+                          <div className="text-sm font-medium text-primary-600">
+                            R$ {(establishment._stats?.consultant_commissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                          </div>
+                          <div className="text-xs text-secondary-500">Consultores</div>
                         </div>
-                        <div className="text-xs text-secondary-500">
-                          Consultor
-                        </div>
-                        <div className="text-xs text-primary-600 mt-1">
-                          R$ {establishment._commission_settings?.manager_bonus_35_arcadas?.toLocaleString('pt-BR') || '5.000'} (35 arc.)
+                        <div>
+                          <div className="text-sm font-medium text-success-600">
+                            R$ {(establishment._stats?.manager_commissions || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}
+                          </div>
+                          <div className="text-xs text-secondary-500">Gerentes</div>
                         </div>
                       </div>
                     </td>
@@ -2123,6 +2143,54 @@ export default function EstablishmentsPage() {
                                 : 0}%
                             </div>
                             <div className="text-sm text-warning-700">Taxa de Conversão</div>
+                          </div>
+
+                        </div>
+                        {/* 🔥 NOVO: Configurações do Estabelecimento */}
+                        <div className="mt-6 pt-4 border-t border-primary-300">
+                          <h5 className="font-medium text-primary-900 mb-3">Configurações de Comissão</h5>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Configurações do Consultor */}
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                              <h6 className="text-sm font-medium text-blue-900 mb-2">Consultor</h6>
+                              <div className="space-y-1 text-xs text-blue-700">
+                                <div className="flex justify-between">
+                                  <span>Valor por arcada:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.consultant_value_per_arcada?.toLocaleString('pt-BR') || '750'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Bônus a cada:</span>
+                                  <span className="font-medium">{selectedEstablishment?._commission_settings?.consultant_bonus_every_arcadas || '7'} arcadas</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Valor do bônus:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.consultant_bonus_value?.toLocaleString('pt-BR') || '750'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Configurações do Gerente */}
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                              <h6 className="text-sm font-medium text-green-900 mb-2">Gerente</h6>
+                              <div className="space-y-1 text-xs text-green-700">
+                                <div className="flex justify-between">
+                                  <span>Valor por arcada:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.manager_value_per_arcada?.toLocaleString('pt-BR') || '750'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Bônus 35 arcadas:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.manager_bonus_35_arcadas?.toLocaleString('pt-BR') || '5.000'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Bônus 50 arcadas:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.manager_bonus_50_arcadas?.toLocaleString('pt-BR') || '10.000'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Bônus 75 arcadas:</span>
+                                  <span className="font-medium">R$ {selectedEstablishment?._commission_settings?.manager_bonus_75_arcadas?.toLocaleString('pt-BR') || '15.000'}</span>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
