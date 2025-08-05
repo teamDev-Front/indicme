@@ -429,12 +429,6 @@ export default function CommissionsPage() {
               : 'Visualize todas as comissões da clínica'
             }
           </p>
-          {/* 🔥 NOVO: Aviso sobre permissões para não-admins */}
-          {profile?.role !== 'clinic_admin' && profile?.role !== 'consultant' && (
-            <p className="text-sm text-warning-600 mt-1">
-              ⚠️ Apenas administradores da clínica podem pagar ou cancelar comissões
-            </p>
-          )}
         </div>
 
         {/* {canManageCommissions && (
