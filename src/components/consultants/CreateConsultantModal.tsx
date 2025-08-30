@@ -1,4 +1,4 @@
-// src/components/consultants/CreateConsultantModal.tsx - VERSÃO CORRIGIDA
+// src/components/consultants/CreateConsultantModal.tsx - VERSÃO CORRIGIDA PARA SUPER ADMIN
 'use client'
 
 import { Fragment, useState, useEffect } from 'react'
@@ -12,6 +12,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import toast from 'react-hot-toast'
+import EstablishmentAutocomplete from '@/components/establishments/EstablishmentAutocomplete'
 
 interface CreateConsultantModalProps {
   isOpen: boolean
@@ -35,16 +36,24 @@ export default function CreateConsultantModal({
     full_name: '',
     email: '',
     phone: '',
-    password: ''
+    password: '',
+    establishment_name: '' // 🔥 NOVO: Para clinic_admin selecionar estabelecimento
   })
   const [managerEstablishment, setManagerEstablishment] = useState<ManagerEstablishment | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [loadingEstablishment, setLoadingEstablishment] = useState(false)
   const supabase = createClient()
 
+  // 🔥 NOVO: Determinar se é manager ou clinic_admin
+  const isManager = profile?.role === 'manager'
+  const isClinicAdmin = profile?.role === 'clinic_admin'
+
   useEffect(() => {
-    if (isOpen && profile?.role === 'manager') {
-      fetchManagerEstablishment()
+    if (isOpen) {
+      if (isManager) {
+        fetchManagerEstablishment()
+      }
+      // clinic_admin não precisa buscar estabelecimento fixo
     }
   }, [isOpen, profile])
 
@@ -65,7 +74,7 @@ export default function CreateConsultantModal({
         `)
         .eq('user_id', profile?.id)
         .eq('status', 'active')
-        .single() // Um gerente deve ter apenas um estabelecimento
+        .single()
 
       if (error) {
         console.error('Erro ao buscar estabelecimento do gerente:', error)
@@ -100,21 +109,33 @@ export default function CreateConsultantModal({
     }
   }
 
+  // 🔥 NOVO: Função para criar estabelecimento (para clinic_admin)
+  const handleCreateNewEstablishment = async (name: string) => {
+    setFormData(prev => ({ ...prev, establishment_name: name }))
+    toast.success('Novo estabelecimento será criado!')
+  }
+
   const handleCreateConsultant = async () => {
     if (!profile) {
       toast.error('Usuário não autenticado')
       return
     }
 
-    if (!managerEstablishment) {
+    // Validação específica por role
+    if (isManager && !managerEstablishment) {
       toast.error('Estabelecimento não identificado')
+      return
+    }
+
+    if (isClinicAdmin && !formData.establishment_name) {
+      toast.error('Selecione um estabelecimento')
       return
     }
 
     try {
       setSubmitting(true)
 
-      // 1. Buscar clínica do gerente
+      // 1. Buscar clínica do usuário atual
       const { data: userClinic, error: clinicError } = await supabase
         .from('user_clinics')
         .select('clinic_id')
@@ -145,7 +166,7 @@ export default function CreateConsultantModal({
       // 3. Aguardar propagação
       await new Promise(resolve => setTimeout(resolve, 2000))
 
-      // 4. Criar perfil (SEM ON CONFLICT)
+      // 4. Criar perfil
       const { error: profileError } = await supabase
         .from('users')
         .insert({
@@ -158,7 +179,6 @@ export default function CreateConsultantModal({
         })
 
       if (profileError) {
-        // Se der erro de duplicata, tentar update
         if (profileError.code === '23505') {
           const { error: updateError } = await supabase
             .from('users')
@@ -178,7 +198,7 @@ export default function CreateConsultantModal({
         }
       }
 
-      // 5. Associar à clínica (SEM ON CONFLICT)
+      // 5. Associar à clínica
       const { error: clinicAssocError } = await supabase
         .from('user_clinics')
         .insert({
@@ -186,53 +206,102 @@ export default function CreateConsultantModal({
           clinic_id: userClinic.clinic_id,
         })
 
-      if (clinicAssocError) {
-        // Se der erro de duplicata, ignorar (já está associado)
-        if (clinicAssocError.code !== '23505') {
-          throw clinicAssocError
-        }
+      if (clinicAssocError && clinicAssocError.code !== '23505') {
+        throw clinicAssocError
       }
 
-      // 6. Criar hierarquia (SEM ON CONFLICT)
-      const { error: hierarchyError } = await supabase
-        .from('hierarchies')
-        .insert({
-          manager_id: profile.id,
-          consultant_id: newUserId,
-          clinic_id: userClinic.clinic_id,
-        })
+      // 6. 🔥 NOVO: Lógica diferente para manager vs clinic_admin
+      if (isManager && managerEstablishment) {
+        // MANAGER: Usar estabelecimento fixo e criar hierarquia
 
-      if (hierarchyError) {
-        // Se der erro de duplicata, ignorar (já está na hierarquia)
-        if (hierarchyError.code !== '23505') {
+        // Vincular ao estabelecimento do gerente
+        const { error: establishmentError } = await supabase
+          .from('user_establishments')
+          .insert({
+            user_id: newUserId,
+            establishment_code: managerEstablishment.code,
+            status: 'active',
+            added_by: profile.id
+          })
+
+        if (establishmentError) {
+          console.warn('Erro ao vincular ao estabelecimento:', establishmentError)
+        }
+
+        // Criar hierarquia
+        const { error: hierarchyError } = await supabase
+          .from('hierarchies')
+          .insert({
+            manager_id: profile.id,
+            consultant_id: newUserId,
+            clinic_id: userClinic.clinic_id,
+          })
+
+        if (hierarchyError && hierarchyError.code !== '23505') {
           console.warn('Erro ao criar hierarquia:', hierarchyError)
-          toast.error('Consultor criado, mas não foi vinculado à sua equipe')
         }
+
+        toast.success(`Consultor criado e vinculado ao estabelecimento ${managerEstablishment.name}!`)
+
+      } else if (isClinicAdmin && formData.establishment_name) {
+        // CLINIC_ADMIN: Buscar/criar estabelecimento e vincular consultor
+
+        // Buscar estabelecimento existente
+        let establishmentCode = ''
+        const { data: existingEstablishment } = await supabase
+          .from('establishment_codes')
+          .select('code')
+          .eq('name', formData.establishment_name)
+          .eq('is_active', true)
+          .single()
+
+        if (existingEstablishment) {
+          establishmentCode = existingEstablishment.code
+        } else {
+          // Criar novo estabelecimento
+          const { data: newEstablishment, error: estError } = await supabase
+            .from('establishment_codes')
+            .insert({
+              code: formData.establishment_name.toUpperCase().replace(/\s+/g, '_'),
+              name: formData.establishment_name,
+              is_active: true
+            })
+            .select('code')
+            .single()
+
+          if (estError) {
+            console.warn('Erro ao criar estabelecimento:', estError)
+          } else if (newEstablishment) {
+            establishmentCode = newEstablishment.code
+          }
+        }
+
+        // Vincular consultor ao estabelecimento
+        if (establishmentCode) {
+          const { error: establishmentError } = await supabase
+            .from('user_establishments')
+            .insert({
+              user_id: newUserId,
+              establishment_code: establishmentCode,
+              status: 'active',
+              added_by: profile.id
+            })
+
+          if (establishmentError) {
+            console.warn('Erro ao vincular ao estabelecimento:', establishmentError)
+          }
+        }
+
+        toast.success(`Consultor criado e vinculado ao estabelecimento ${formData.establishment_name}!`)
       }
-
-      // 7. Vincular ao estabelecimento do gerente
-      const { error: establishmentError } = await supabase
-        .from('user_establishments')
-        .insert({
-          user_id: newUserId,
-          establishment_code: managerEstablishment.code,
-          status: 'active',
-          added_by: profile.id
-        })
-
-      if (establishmentError) {
-        console.warn('Erro ao vincular ao estabelecimento:', establishmentError)
-        toast.error('Consultor criado, mas houve problema ao vincular ao estabelecimento')
-      }
-
-      toast.success(`Consultor criado e vinculado ao estabelecimento ${managerEstablishment.name}!`)
 
       // Resetar form
       setFormData({
         full_name: '',
         email: '',
         phone: '',
-        password: ''
+        password: '',
+        establishment_name: ''
       })
 
       onClose()
@@ -283,33 +352,52 @@ export default function CreateConsultantModal({
             >
               <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                 <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-secondary-900 mb-4">
-                  Adicionar Consultor à Minha Equipe
+                  {isManager ? 'Adicionar Consultor à Minha Equipe' : 'Novo Consultor'}
                 </Dialog.Title>
 
-                {loadingEstablishment ? (
+                {(isManager && loadingEstablishment) ? (
                   <div className="flex items-center justify-center py-8">
                     <div className="loading-spinner w-6 h-6 mr-3"></div>
                     <span className="text-secondary-600">Carregando estabelecimento...</span>
                   </div>
-                ) : managerEstablishment ? (
+                ) : (isManager && managerEstablishment) || isClinicAdmin ? (
                   <div className="space-y-6">
-                    {/* Estabelecimento do Gerente (Fixo) */}
+                    {/* Estabelecimento (diferente para manager vs clinic_admin) */}
                     <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
                       <div className="flex items-start">
                         <BuildingOfficeIcon className="h-5 w-5 text-primary-500 mr-3 mt-0.5" />
                         <div className="flex-1">
                           <h4 className="text-sm font-medium text-primary-900">Estabelecimento</h4>
-                          <p className="text-sm text-primary-700 font-medium mt-1">
-                            {managerEstablishment.name}
-                          </p>
-                          <p className="text-xs text-primary-600 mt-1">
-                            Código: {managerEstablishment.code}
-                          </p>
-                          {managerEstablishment.description && (
-                            <p className="text-xs text-primary-600 mt-1">
-                              {managerEstablishment.description}
-                            </p>
-                          )}
+                          {isManager && managerEstablishment ? (
+                            <>
+                              <p className="text-sm text-primary-700 font-medium mt-1">
+                                {managerEstablishment.name}
+                              </p>
+                              <p className="text-xs text-primary-600 mt-1">
+                                Código: {managerEstablishment.code}
+                              </p>
+                              {managerEstablishment.description && (
+                                <p className="text-xs text-primary-600 mt-1">
+                                  {managerEstablishment.description}
+                                </p>
+                              )}
+                              <p className="text-xs text-primary-600 mt-2">
+                                O consultor será automaticamente vinculado ao seu estabelecimento
+                              </p>
+                            </>
+                          ) : isClinicAdmin ? (
+                            <div className="mt-2">
+                              <EstablishmentAutocomplete
+                                value={formData.establishment_name}
+                                onChange={(value) => setFormData(prev => ({ ...prev, establishment_name: value }))}
+                                onCreateNew={handleCreateNewEstablishment}
+                                placeholder="Digite para buscar ou criar novo estabelecimento..."
+                              />
+                              <p className="text-xs text-primary-600 mt-1">
+                                Selecione um estabelecimento existente ou crie um novo
+                              </p>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -380,10 +468,19 @@ export default function CreateConsultantModal({
                         <div>
                           <h4 className="text-sm font-medium text-blue-900">Como Funciona</h4>
                           <ul className="text-sm text-blue-700 mt-1 space-y-1">
-                            <li>• O consultor será automaticamente vinculado ao seu estabelecimento</li>
-                            <li>• Ele será adicionado à sua equipe de gerenciamento</li>
+                            {isManager ? (
+                              <>
+                                <li>• O consultor será automaticamente vinculado ao seu estabelecimento</li>
+                                <li>• Ele será adicionado à sua equipe de gerenciamento</li>
+                              </>
+                            ) : (
+                              <>
+                                <li>• O consultor será vinculado ao estabelecimento selecionado</li>
+                                <li>• Poderá criar indicações para este estabelecimento</li>
+                              </>
+                            )}
                             <li>• Receberá email com login e senha temporária</li>
-                            <li>• Poderá criar indicações apenas para este estabelecimento</li>
+                            <li>• Poderá alterar a senha no primeiro acesso</li>
                           </ul>
                         </div>
                       </div>
@@ -393,10 +490,13 @@ export default function CreateConsultantModal({
                   <div className="text-center py-8">
                     <XMarkIcon className="mx-auto h-12 w-12 text-danger-400 mb-4" />
                     <h3 className="text-lg font-medium text-secondary-900 mb-2">
-                      Estabelecimento não encontrado
+                      {isManager ? 'Estabelecimento não encontrado' : 'Erro de configuração'}
                     </h3>
                     <p className="text-secondary-500">
-                      Você precisa estar vinculado a um estabelecimento para criar consultores.
+                      {isManager
+                        ? 'Você precisa estar vinculado a um estabelecimento para criar consultores.'
+                        : 'Houve um problema na configuração. Tente novamente.'
+                      }
                     </p>
                   </div>
                 )}
@@ -409,7 +509,7 @@ export default function CreateConsultantModal({
                   >
                     Cancelar
                   </button>
-                  {managerEstablishment && (
+                  {((isManager && managerEstablishment) || (isClinicAdmin && formData.establishment_name)) && (
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -430,7 +530,7 @@ export default function CreateConsultantModal({
                       ) : (
                         <>
                           <UserPlusIcon className="h-4 w-4 mr-2" />
-                          Adicionar à Minha Equipe
+                          {isManager ? 'Adicionar à Minha Equipe' : 'Criar Consultor'}
                         </>
                       )}
                     </button>

@@ -1,1081 +1,990 @@
+// src/app/dashboard/leads/new/page.tsx - FUNÇÃO fetchConsultants CORRIGIDA
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
-import Link from 'next/link'
-import { motion } from 'framer-motion'
-import {
-  PlusIcon,
-  MagnifyingGlassIcon,
-  FunnelIcon,
-  EyeIcon,
-  PencilIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  ClockIcon,
-  PhoneIcon,
-  EnvelopeIcon,
-  MapPinIcon,
-  UserIcon,
-  CurrencyDollarIcon,
-  StarIcon,
-  PlayIcon,
-} from '@heroicons/react/24/outline'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import toast from 'react-hot-toast'
-import LeadDetailModal from '@/components/leads/LeadDetailModal'
-import ArcadasModal from '@/components/leads/ArcadasModal'
+import { motion } from 'framer-motion'
+import { ArrowLeftIcon, MagnifyingGlassIcon, UserIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
+import Link from 'next/link'
 
-interface Lead {
+// Schemas para validação
+const basicLeadSchema = z.object({
+  full_name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
+  phone: z.string().min(10, 'Telefone deve ter pelo menos 10 dígitos'),
+  email: z.string().email('Email inválido').optional().or(z.literal('')),
+  notes: z.string().optional(),
+})
+
+const advancedLeadSchema = basicLeadSchema.extend({
+  indicated_by_type: z.enum(['consultant', 'lead']),
+  indicated_by_id: z.string().min(1, 'Selecione quem indicou'),
+  commission_percentage: z.number().min(0).max(100).optional(),
+})
+
+type BasicLeadFormData = z.infer<typeof basicLeadSchema>
+type AdvancedLeadFormData = z.infer<typeof advancedLeadSchema>
+
+interface Consultant {
   id: string
   full_name: string
-  email: string | null
-  phone: string
-  cpf: string | null
-  address: string | null
-  city: string | null
-  state: string | null
-  zip_code: string | null
-  age: number | null
-  gender: 'male' | 'female' | 'other' | null
-  notes: string | null
-  status: 'new' | 'contacted' | 'scheduled' | 'converted' | 'lost'
-  indicated_by: string
-  establishment_code?: string
-  clinic_id: string
-  created_at: string
-  updated_at: string
-  arcadas_vendidas?: number
-  converted_at?: string
-  consultant_id?: string
-  manager_id?: string
-  users?: {
-    full_name: string
-    email: string
-  }
+  email: string
   establishment_name?: string
-
 }
 
-const statusOptions = [
-  { value: 'new', label: 'Novo', color: 'primary' },
-  { value: 'contacted', label: 'Contatado', color: 'warning' },
-  { value: 'scheduled', label: 'Agendado', color: 'primary' },
-  { value: 'converted', label: 'Convertido', color: 'success' },
-  { value: 'lost', label: 'Perdido', color: 'danger' },
-]
+interface ConvertedLead {
+  id: string
+  full_name: string
+  phone: string
+  indicated_by: string
+  consultant_name: string
+  consultant_email: string
+}
 
-export default function LeadsPage() {
+interface EstablishmentCommission {
+  consultant_value_per_arcada: number
+  establishment_code: string
+}
+
+export default function NewLeadPage() {
   const { profile } = useAuth()
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [loading, setLoading] = useState(true)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [establishmentFilter, setEstablishmentFilter] = useState('')
-  const [establishments, setEstablishments] = useState<string[]>([])
-  const [consultantFilter, setConsultantFilter] = useState('')
-  const [dateFilter, setDateFilter] = useState('')
-  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [consultants, setConsultants] = useState<Array<{ id: string, full_name: string }>>([])
-  const [showArcadasModal, setShowArcadasModal] = useState(false)
-  const [selectedLeadForConversion, setSelectedLeadForConversion] = useState<Lead | null>(null)
+  const router = useRouter()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Estados para formulário avançado (admin/manager)
+  const [consultants, setConsultants] = useState<Consultant[]>([])
+  const [convertedLeads, setConvertedLeads] = useState<ConvertedLead[]>([])
+  const [searchConsultants, setSearchConsultants] = useState('')
+  const [searchLeads, setSearchLeads] = useState('')
+  const [establishments, setEstablishments] = useState<EstablishmentCommission[]>([])
+  const [selectedEstablishment, setSelectedEstablishment] = useState<string>('')
+  const [commissionPreview, setCommissionPreview] = useState<{
+    baseValue: number
+    percentage: number
+    finalValue: number
+  } | null>(null)
+
+  const [clinicId, setClinicId] = useState<string>('')
+
   const supabase = createClient()
 
+  // Determinar qual formulário mostrar
+  // Manager também deve ter acesso ao formulário avançado
+  const isAdvancedForm = profile?.role === 'clinic_admin' || profile?.role === 'manager'
+
+  // Formulário básico (consultant)
+  const basicForm = useForm<BasicLeadFormData>({
+    resolver: zodResolver(basicLeadSchema),
+  })
+
+  // Formulário avançado (admin/manager)
+  const advancedForm = useForm<AdvancedLeadFormData>({
+    resolver: zodResolver(advancedLeadSchema),
+    defaultValues: {
+      indicated_by_type: 'consultant',
+      commission_percentage: 100,
+    }
+  })
+
+  const indicatedByType = advancedForm.watch('indicated_by_type')
+  const indicatedById = advancedForm.watch('indicated_by_id')
+  const commissionPercentage = advancedForm.watch('commission_percentage')
+
+  // Buscar clinicId primeiro
   useEffect(() => {
     if (profile) {
-      fetchLeads()
+      fetchClinicId()
     }
   }, [profile])
 
-  const fetchLeads = async () => {
+  useEffect(() => {
+    if (isAdvancedForm && clinicId) {
+      fetchAdvancedData()
+    }
+  }, [isAdvancedForm, clinicId])
+
+  useEffect(() => {
+    if (indicatedByType === 'lead') {
+      advancedForm.setValue('commission_percentage', 50)
+    } else {
+      advancedForm.setValue('commission_percentage', 100)
+    }
+  }, [indicatedByType, advancedForm])
+
+  useEffect(() => {
+    if (isAdvancedForm) {
+      updateCommissionPreview()
+    }
+  }, [indicatedById, commissionPercentage, selectedEstablishment, isAdvancedForm])
+
+  const fetchClinicId = async () => {
     try {
-      setLoading(true)
+      console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
 
-      let query = supabase
-        .from('leads')
+      const { data: userClinic, error } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile?.id)
+        .single()
+
+      if (error || !userClinic) {
+        console.error('❌ Erro ao buscar clínica:', error)
+        toast.error('Erro: Usuário não está associado a uma clínica')
+        return
+      }
+
+      console.log('✅ Clinic ID encontrado:', userClinic.clinic_id)
+      setClinicId(userClinic.clinic_id)
+    } catch (error) {
+      console.error('❌ Erro ao buscar clinic_id:', error)
+      toast.error('Erro ao carregar dados da clínica')
+    }
+  }
+
+  const fetchAdvancedData = async () => {
+    if (!profile?.id || !clinicId) return
+
+    try {
+      await Promise.all([
+        fetchConsultants(),
+        fetchConvertedLeads(),
+        fetchEstablishments()
+      ])
+    } catch (error) {
+      console.error('Erro ao buscar dados:', error)
+      toast.error('Erro ao carregar dados do formulário')
+    }
+  }
+
+  // CORREÇÃO PRINCIPAL: Função fetchConsultants corrigida para managers
+  const fetchConsultants = async () => {
+    try {
+      console.log('🔍 Buscando consultores para role:', profile?.role)
+
+      let consultantsQuery = supabase
+        .from('users')
         .select(`
-        *,
-        users:indicated_by (
+          id,
           full_name,
-          email
-        )
-      `)
-        .order('created_at', { ascending: false })
+          email,
+          user_clinics!inner(clinic_id)
+        `)
+        .eq('user_clinics.clinic_id', clinicId)
+        .eq('role', 'consultant')
+        .eq('status', 'active')
+        .order('full_name')
 
-      // Filtrar baseado no role do usuário
-      if (profile?.role === 'consultant') {
-        query = query.eq('indicated_by', profile.id)
-      } else if (profile?.role === 'manager') {
-        // Manager vê leads de sua equipe + próprios
-        const { data: hierarchy } = await supabase
+      // CORREÇÃO: Para managers, filtrar apenas sua equipe
+      if (profile?.role === 'manager') {
+        console.log('👑 Usuário é manager, buscando apenas sua equipe...')
+        
+        // Buscar consultores da equipe do manager
+        const { data: hierarchyData, error: hierarchyError } = await supabase
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
 
-        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
-        consultantIds.push(profile.id)
+        if (hierarchyError) {
+          console.error('❌ Erro ao buscar hierarquia:', hierarchyError)
+          toast.error('Erro ao buscar sua equipe')
+          setConsultants([])
+          return
+        }
 
-        query = query.in('indicated_by', consultantIds)
+        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
+        
+        if (consultantIds.length === 0) {
+          console.log('⚠️ Manager não possui equipe')
+          toast.error('Você não possui consultores em sua equipe')
+          setConsultants([])
+          return
+        }
+
+        console.log('✅ Consultores da equipe encontrados:', consultantIds.length)
+
+        // Filtrar apenas os consultores da equipe
+        consultantsQuery = consultantsQuery.in('id', consultantIds)
       }
-      // Clinic admin/viewer veem todos (sem filtros adicionais)
 
-      const { data, error } = await query
+      const { data, error } = await consultantsQuery
 
       if (error) {
-        throw error
+        console.error('❌ Erro ao buscar consultores:', error)
+        setConsultants([])
+        return
       }
 
-      const leadsData = data || []
+      console.log('✅ Consultores encontrados:', data?.length || 0)
 
-      // 🔥 NOVO: Para cada lead, buscar o estabelecimento do consultor
-      const leadsWithEstablishments = await Promise.all(
-        leadsData.map(async (lead) => {
+      if (!data || data.length === 0) {
+        console.log('⚠️ Nenhum consultor encontrado')
+        const message = profile?.role === 'manager' 
+          ? 'Nenhum consultor encontrado em sua equipe'
+          : 'Nenhum consultor encontrado'
+        toast.error(message)
+        setConsultants([])
+        return
+      }
+
+      // Para cada consultor, buscar estabelecimento
+      const consultantsWithEstablishments = await Promise.all(
+        data.map(async (consultant) => {
           try {
-            // Buscar estabelecimento do consultor que indicou este lead
+            // Buscar estabelecimento do consultor
             const { data: userEstablishment } = await supabase
               .from('user_establishments')
               .select(`
-              establishment_code,
-              establishment_codes!user_establishments_establishment_code_fkey (
-                name
-              )
-            `)
-              .eq('user_id', lead.indicated_by)
+                establishment_code,
+                establishment_codes!user_establishments_establishment_code_fkey (
+                  name
+                )
+              `)
+              .eq('user_id', consultant.id)
               .eq('status', 'active')
               .single()
 
-            let establishmentName = ''
+            let establishmentName = 'Sem estabelecimento'
             if (userEstablishment?.establishment_codes) {
               const estData = Array.isArray(userEstablishment.establishment_codes)
                 ? userEstablishment.establishment_codes[0]
                 : userEstablishment.establishment_codes
-
-              establishmentName = estData?.name || ''
+              
+              establishmentName = estData?.name || 'Estabelecimento não identificado'
             }
 
             return {
-              ...lead,
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
               establishment_name: establishmentName
             }
           } catch (error) {
-            console.warn('Erro ao buscar estabelecimento para lead:', lead.id, error)
+            console.warn('Erro ao buscar estabelecimento do consultor:', consultant.id, error)
             return {
-              ...lead,
-              establishment_name: ''
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
+              establishment_name: 'Erro ao carregar estabelecimento'
             }
           }
         })
       )
 
-      setLeads(leadsWithEstablishments)
+      console.log('✅ Consultores com estabelecimentos processados:', consultantsWithEstablishments.length)
+      setConsultants(consultantsWithEstablishments)
 
-      // Extrair consultores únicos para o filtro
-      const uniqueConsultants = Array.from(
-        new Map(
-          leadsWithEstablishments
-            .filter(lead => lead.users)
-            .map(lead => [lead.users!.full_name, { id: lead.indicated_by, full_name: lead.users!.full_name }])
-        ).values()
-      )
-      setConsultants(uniqueConsultants)
-
-      // 🔥 CORRIGIDO: Extrair estabelecimentos únicos dos leads processados
-      const uniqueEstablishments = Array.from(
-        new Set(
-          leadsWithEstablishments
-            .map(lead => lead.establishment_name)
-            .filter(name => name && name.trim() !== '') // Filtrar nomes vazios
-        )
-      ).sort()
-
-      setEstablishments(uniqueEstablishments)
-
-      console.log('✅ Estabelecimentos únicos encontrados:', uniqueEstablishments)
-
-    } catch (error: any) {
-      console.error('Erro ao buscar leads:', error)
-      toast.error('Erro ao carregar leads')
-    } finally {
-      setLoading(false)
+    } catch (error) {
+      console.error('❌ Erro geral ao buscar consultores:', error)
+      setConsultants([])
+      toast.error('Erro ao carregar consultores')
     }
   }
-
-  // 🔥 NOVA FUNÇÃO: Conversão direta com modal de arcadas
-  const handleQuickConvert = (lead: Lead) => {
-    console.log('🎯 Iniciando conversão rápida para lead:', lead.full_name)
-    setSelectedLeadForConversion(lead)
-    setShowArcadasModal(true)
-  }
-
-
-  // SUBSTITUA a função handleConfirmConversion no arquivo LeadsPage.tsx
-  // Adicionando logs detalhados para debug
-
-  const handleConfirmConversion = async (arcadas: number) => {
-    if (!selectedLeadForConversion) return
-
+  
+  const fetchConvertedLeads = async () => {
     try {
-      console.log('🎯 INICIANDO CONVERSÃO COM DEBUG DETALHADO')
-      console.log('📊 Lead:', selectedLeadForConversion.full_name, '| Arcadas:', arcadas)
-
-      // ===== STEP 1: VERIFICAÇÕES DE SEGURANÇA =====
-      const { data: currentLead, error: checkError } = await supabase
+      let leadsQuery = supabase
         .from('leads')
-        .select('status, arcadas_vendidas')
-        .eq('id', selectedLeadForConversion.id)
-        .single()
+        .select(`
+          id,
+          full_name,
+          phone,
+          indicated_by,
+          users!leads_indicated_by_fkey (
+            full_name,
+            email
+          )
+        `)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'converted')
+        .order('created_at', { ascending: false })
+        .limit(50)
 
-      if (checkError) {
-        console.error('❌ Erro ao verificar status do lead:', checkError)
-        throw checkError
+      // CORREÇÃO: Para managers, filtrar apenas leads da equipe
+      if (profile?.role === 'manager') {
+        const { data: hierarchyData } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+
+        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id) // Incluir próprios leads do manager
+
+        if (consultantIds.length > 0) {
+          leadsQuery = leadsQuery.in('indicated_by', consultantIds)
+        }
       }
 
-      if (currentLead.status === 'converted') {
-        console.log('⚠️ LEAD JÁ CONVERTIDO - ABORTANDO')
-        toast.error('Este lead já foi convertido!')
-        setShowArcadasModal(false)
-        setSelectedLeadForConversion(null)
+      const { data, error } = await leadsQuery
+
+      if (error) {
+        console.error('Erro ao buscar leads convertidos:', error)
         return
       }
 
-      // ===== STEP 2: BUSCAR ESTABLISHMENT_CODE =====
-      console.log('🔍 Buscando establishment_code para usuário:', selectedLeadForConversion.indicated_by)
+      const leadsData = data?.map(lead => {
+        const users = lead.users as any[]
+        const user = Array.isArray(users) ? users[0] : users
 
-      const { data: userEstablishment, error: userEstError } = await supabase
+        return {
+          id: lead.id,
+          full_name: lead.full_name,
+          phone: lead.phone,
+          indicated_by: lead.indicated_by,
+          consultant_name: user?.full_name || 'Consultor não encontrado',
+          consultant_email: user?.email || ''
+        }
+      }) || []
+
+      console.log('✅ Leads convertidos encontrados:', leadsData.length)
+      setConvertedLeads(leadsData)
+    } catch (error) {
+      console.error('Erro ao buscar leads convertidos:', error)
+    }
+  }
+
+  const fetchEstablishments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('establishment_commissions')
+        .select('establishment_code, consultant_value_per_arcada')
+
+      if (error) {
+        console.error('Erro ao buscar estabelecimentos:', error)
+        return
+      }
+
+      setEstablishments(data || [])
+    } catch (error) {
+      console.error('Erro ao buscar estabelecimentos:', error)
+    }
+  }
+
+  const updateCommissionPreview = () => {
+    if (!indicatedById || !selectedEstablishment) {
+      setCommissionPreview(null)
+      return
+    }
+
+    const establishment = establishments.find(e => e.establishment_code === selectedEstablishment)
+    if (!establishment) return
+
+    const baseValue = establishment.consultant_value_per_arcada
+    const percentage = commissionPercentage || 100
+    const finalValue = (baseValue * percentage) / 100
+
+    setCommissionPreview({
+      baseValue,
+      percentage,
+      finalValue
+    })
+  }
+
+  // Submit para formulário básico (consultant)
+  const onBasicSubmit = async (data: BasicLeadFormData) => {
+    if (!profile || !clinicId) {
+      toast.error('Dados do usuário ou clínica não encontrados')
+      return
+    }
+
+    try {
+      setIsSubmitting(true)
+
+      // Buscar establishment_code do usuário
+      const { data: userEstablishment } = await supabase
         .from('user_establishments')
         .select('establishment_code')
-        .eq('user_id', selectedLeadForConversion.indicated_by)
+        .eq('user_id', profile.id)
         .eq('status', 'active')
         .single()
 
-      if (userEstError) {
-        console.error('❌ Erro ao buscar establishment do usuário:', userEstError)
+      // Preparar dados do lead
+      const leadData = {
+        full_name: data.full_name,
+        phone: data.phone,
+        email: data.email || null,
+        notes: data.notes || null,
+        indicated_by: profile.id, // O próprio usuário indica
+        clinic_id: clinicId,
+        status: 'new' as const,
+        establishment_code: userEstablishment?.establishment_code || null,
+        commission_percentage: 100,
       }
-
-      const establishmentCode = userEstablishment?.establishment_code
-      console.log('🏢 Establishment code encontrado:', establishmentCode)
-
-      if (!establishmentCode) {
-        console.error('❌ ESTABLISHMENT CODE NÃO ENCONTRADO!')
-        toast.error('Erro: Código do estabelecimento não encontrado para este consultor')
-        return
-      }
-
-      // ===== 🔥 CORREÇÃO: BUSCAR CONFIGURAÇÕES CORRETAS DO ESTABELECIMENTO =====
-      console.log('⚙️ Buscando configurações ESPECÍFICAS do estabelecimento:', establishmentCode)
-
-      const { data: establishmentSettings, error: settingsError } = await supabase
-        .from('establishment_commissions')
-        .select('*')
-        .eq('establishment_code', establishmentCode)
-        .single()
-
-      if (settingsError) {
-        console.error('❌ Erro ao buscar configurações do estabelecimento:', settingsError)
-        console.log('⚠️ Usando configurações padrão')
-      }
-
-      // 🔥 VALORES CORRETOS: Usar configurações específicas do estabelecimento
-      const consultantValuePerArcada = establishmentSettings?.consultant_value_per_arcada || 750
-      const managerValuePerArcada = establishmentSettings?.manager_value_per_arcada || 750
-      const managerBonusActive = establishmentSettings?.manager_bonus_active !== false
-
-      console.log('💰 CONFIGURAÇÕES CARREGADAS DO ESTABELECIMENTO:')
-      console.log('   - Valor por arcada (consultor):', consultantValuePerArcada)
-      console.log('   - Valor por arcada (gerente):', managerValuePerArcada) // 🔥 ESTE É O VALOR CORRETO
-      console.log('   - Arcadas selecionadas:', arcadas)
-      console.log('   - Valor total calculado consultor:', arcadas * consultantValuePerArcada)
-      console.log('   - Valor total calculado gerente:', arcadas * managerValuePerArcada)
-
-      // ===== VERIFICAR COMISSÕES EXISTENTES =====
-      const { data: existingCommissions, error: commissionsCheckError } = await supabase
-        .from('commissions')
-        .select('id, amount, type, establishment_code, valor_por_arcada, arcadas_vendidas')
-        .eq('lead_id', selectedLeadForConversion.id)
-
-      if (commissionsCheckError) {
-        console.error('❌ Erro ao verificar comissões existentes:', commissionsCheckError)
-        throw commissionsCheckError
-      }
-
-      if (existingCommissions && existingCommissions.length > 0) {
-        console.log('🔍 COMISSÕES EXISTENTES ENCONTRADAS:')
-        console.table(existingCommissions)
-
-        const consultantCommission = existingCommissions.find(c => c.type === 'consultant')
-
-        if (consultantCommission) {
-          const expectedAmount = arcadas * consultantValuePerArcada
-          const hasWrongAmount = Math.abs(consultantCommission.amount - expectedAmount) > 0.01
-          const hasWrongEstablishment = !consultantCommission.establishment_code ||
-            consultantCommission.establishment_code !== establishmentCode
-
-          console.log('🔍 VERIFICAÇÃO DE VALORES CONSULTOR:')
-          console.log('   - Valor atual na comissão:', consultantCommission.amount)
-          console.log('   - Valor esperado:', expectedAmount)
-
-          if (hasWrongAmount || hasWrongEstablishment) {
-            console.log('🔧 CORRIGINDO COMISSÃO DO CONSULTOR...')
-
-            const { error: updateError } = await supabase
-              .from('commissions')
-              .update({
-                amount: expectedAmount,
-                establishment_code: establishmentCode,
-                valor_por_arcada: consultantValuePerArcada,
-                arcadas_vendidas: arcadas,
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', consultantCommission.id)
-
-            if (updateError) {
-              console.error('❌ Erro ao corrigir comissão do consultor:', updateError)
-              throw updateError
-            }
-
-            console.log('✅ COMISSÃO DO CONSULTOR CORRIGIDA!')
-          }
-
-          // 🔥 CORREÇÃO: Verificar comissão do gerente também
-          const managerCommission = existingCommissions.find(c => c.type === 'manager')
-
-          if (managerCommission) {
-            const expectedManagerAmount = arcadas * managerValuePerArcada
-            const hasWrongManagerAmount = Math.abs(managerCommission.amount - expectedManagerAmount) > 0.01
-
-            console.log('🔍 VERIFICAÇÃO DE VALORES GERENTE:')
-            console.log('   - Valor atual na comissão gerente:', managerCommission.amount)
-            console.log('   - Valor esperado gerente:', expectedManagerAmount)
-            console.log('   - Valor por arcada usado:', managerValuePerArcada)
-
-            if (hasWrongManagerAmount) {
-              console.log('🔧 CORRIGINDO COMISSÃO DO GERENTE...')
-
-              const { error: updateManagerError } = await supabase
-                .from('commissions')
-                .update({
-                  amount: expectedManagerAmount,
-                  establishment_code: establishmentCode,
-                  valor_por_arcada: managerValuePerArcada, // 🔥 USAR O VALOR CORRETO
-                  arcadas_vendidas: arcadas,
-                  updated_at: new Date().toISOString()
-                })
-                .eq('id', managerCommission.id)
-
-              if (updateManagerError) {
-                console.error('❌ Erro ao corrigir comissão do gerente:', updateManagerError)
-                throw updateManagerError
-              }
-
-              console.log('✅ COMISSÃO DO GERENTE CORRIGIDA!')
-              toast.success('Lead convertido e comissões corrigidas!')
-            } else {
-              console.log('✅ COMISSÃO DO GERENTE JÁ ESTÁ CORRETA')
-              toast.success('Lead já convertido com valores corretos!')
-            }
-          }
-
-          // Atualizar o lead se necessário
-          if (currentLead.status !== 'converted') {
-            await supabase
-              .from('leads')
-              .update({
-                status: 'converted',
-                arcadas_vendidas: arcadas,
-                establishment_code: establishmentCode,
-                converted_at: new Date().toISOString()
-              })
-              .eq('id', selectedLeadForConversion.id)
-          }
-
-          setShowArcadasModal(false)
-          setSelectedLeadForConversion(null)
-          fetchLeads() // Recarregar a lista
-          return
-        }
-      }
-
-      // ===== PROSSEGUIR COM CRIAÇÃO NOVA =====
-      console.log('📝 CRIANDO NOVA CONVERSÃO...')
-
-      // Atualizar o lead primeiro
-      const { error: leadError } = await supabase
-        .from('leads')
-        .update({
-          status: 'converted',
-          arcadas_vendidas: arcadas,
-          establishment_code: establishmentCode,
-          converted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedLeadForConversion.id)
-
-      if (leadError) {
-        console.error('❌ Erro ao atualizar lead:', leadError)
-        throw leadError
-      }
-
-      console.log('✅ LEAD ATUALIZADO COM SUCESSO')
-
-      // Calcular comissão do consultor
-      const valorBaseConsultor = arcadas * consultantValuePerArcada
-
-      console.log('💰 CRIANDO COMISSÃO DO CONSULTOR:')
-      console.log('   - Usuário ID:', selectedLeadForConversion.indicated_by)
-      console.log('   - Valor calculado:', valorBaseConsultor)
-      console.log('   - Valor por arcada:', consultantValuePerArcada)
-      console.log('   - Arcadas:', arcadas)
-      console.log('   - Establishment:', establishmentCode)
-
-      // Criar a comissão do consultor
-      const { data: consultantCommissionData, error: consultantCommissionError } = await supabase
-        .from('commissions')
-        .insert({
-          lead_id: selectedLeadForConversion.id,
-          user_id: selectedLeadForConversion.indicated_by,
-          clinic_id: selectedLeadForConversion.clinic_id,
-          establishment_code: establishmentCode,
-          amount: valorBaseConsultor,
-          percentage: 100,
-          type: 'consultant',
-          status: 'pending',
-          arcadas_vendidas: arcadas,
-          valor_por_arcada: consultantValuePerArcada,
-          bonus_conquistados: 0,
-          valor_bonus: 0
-        })
-        .select('id, amount')
-        .single()
-
-      if (consultantCommissionError) {
-        console.error('❌ ERRO AO CRIAR COMISSÃO DO CONSULTOR:', consultantCommissionError)
-        throw consultantCommissionError
-      }
-
-      console.log('✅ COMISSÃO DO CONSULTOR CRIADA:', consultantCommissionData)
-
-      // 🔥 CRIAR COMISSÃO DO GERENTE (SE HOUVER)
-      const { data: hierarchy } = await supabase
-        .from('hierarchies')
-        .select('manager_id')
-        .eq('consultant_id', selectedLeadForConversion.indicated_by)
-        .single()
-
-      if (hierarchy?.manager_id) {
-        console.log('👑 CRIANDO COMISSÃO DO GERENTE...')
-
-        // 🔥 USAR VALOR CORRETO DO GERENTE
-        const valorBaseGerente = arcadas * managerValuePerArcada
-
-        console.log('💰 CRIANDO COMISSÃO DO GERENTE:')
-        console.log('   - Manager ID:', hierarchy.manager_id)
-        console.log('   - Valor calculado:', valorBaseGerente)
-        console.log('   - Valor por arcada gerente:', managerValuePerArcada) // 🔥 VALOR CORRETO
-        console.log('   - Arcadas:', arcadas)
-
-        const { data: managerCommissionData, error: managerCommissionError } = await supabase
-          .from('commissions')
-          .insert({
-            lead_id: selectedLeadForConversion.id,
-            user_id: hierarchy.manager_id,
-            clinic_id: selectedLeadForConversion.clinic_id,
-            establishment_code: establishmentCode,
-            amount: valorBaseGerente, // 🔥 VALOR CORRETO
-            percentage: 100,
-            type: 'manager',
-            status: 'pending',
-            arcadas_vendidas: arcadas,
-            valor_por_arcada: managerValuePerArcada, // 🔥 VALOR CORRETO
-            bonus_conquistados: 0,
-            valor_bonus: 0
-          })
-          .select('id, amount')
-          .single()
-
-        if (managerCommissionError) {
-          console.error('❌ ERRO AO CRIAR COMISSÃO DO GERENTE:', managerCommissionError)
-          // Não falhar por causa do gerente, mas avisar
-          console.warn('⚠️ Continuando sem comissão do gerente')
-        } else {
-          console.log('✅ COMISSÃO DO GERENTE CRIADA:', managerCommissionData)
-          console.log('💰 Valor final da comissão do gerente:', managerCommissionData.amount)
-        }
-      }
-
-      toast.success(`Lead convertido! Comissão de R$ ${valorBaseConsultor.toLocaleString('pt-BR')} criada!`)
-
-      setShowArcadasModal(false)
-      setSelectedLeadForConversion(null)
-      fetchLeads()
-
-    } catch (error: any) {
-      console.error('❌ ERRO DURANTE CONVERSÃO:', error)
-      toast.error(`Erro ao converter lead: ${error.message}`)
-    } finally {
-      setUpdatingStatus(null)
-    }
-  }
-
-  const updateLeadStatus = async (leadId: string, newStatus: string) => {
-    try {
-      // Se está marcando como convertido, abrir modal de arcadas
-      if (newStatus === 'converted') {
-        const lead = leads.find(l => l.id === leadId)
-        if (lead) {
-          handleQuickConvert(lead)
-          return // Não atualizar ainda, esperar o modal
-        }
-      }
-
-      // Para outros status, fazer a mudança normal
-      setUpdatingStatus(leadId)
 
       const { error } = await supabase
         .from('leads')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', leadId)
+        .insert(leadData)
 
       if (error) {
         throw error
       }
 
-      setLeads(prev => prev.map(lead =>
-        lead.id === leadId
-          ? { ...lead, status: newStatus as any, updated_at: new Date().toISOString() }
-          : lead
-      ))
-
-      toast.success('Status atualizado com sucesso!')
+      toast.success('Lead cadastrado com sucesso!')
+      basicForm.reset()
+      router.push('/dashboard/leads')
     } catch (error: any) {
-      console.error('Erro ao atualizar status:', error)
-      toast.error('Erro ao atualizar status')
+      console.error('Erro ao cadastrar lead:', error)
+      toast.error(error.message || 'Erro ao cadastrar lead')
     } finally {
-      setUpdatingStatus(null)
+      setIsSubmitting(false)
     }
   }
 
-  const handleViewLead = (leadId: string) => {
-    setSelectedLeadId(leadId)
-    setIsModalOpen(true)
-  }
+  // Submit para formulário avançado (admin/manager)
+  const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
+    if (!profile || !clinicId) {
+      toast.error('Dados do usuário ou clínica não encontrados')
+      return
+    }
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false)
-    setSelectedLeadId(null)
-  }
+    try {
+      setIsSubmitting(true)
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'converted':
-        return <CheckCircleIcon className="h-4 w-4" />
-      case 'lost':
-        return <XCircleIcon className="h-4 w-4" />
-      default:
-        return <ClockIcon className="h-4 w-4" />
+      // Determinar quem realmente indicou
+      let actualIndicatedBy = data.indicated_by_id
+      let originalLeadId = null
+
+      if (data.indicated_by_type === 'lead') {
+        // Se foi indicado por um lead, pegar o consultor desse lead
+        const selectedLead = convertedLeads.find(lead => lead.id === data.indicated_by_id)
+        if (selectedLead) {
+          actualIndicatedBy = selectedLead.indicated_by
+          originalLeadId = selectedLead.id
+        }
+      }
+
+      // CORREÇÃO: Buscar establishment_code do consultor selecionado
+      let establishmentCode = null
+      const { data: consultantEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', actualIndicatedBy)
+        .eq('status', 'active')
+        .single()
+
+      if (consultantEstablishment) {
+        establishmentCode = consultantEstablishment.establishment_code
+      }
+
+      // Preparar dados do lead
+      const leadData = {
+        full_name: data.full_name,
+        phone: data.phone,
+        email: data.email || null,
+        notes: data.notes || null,
+        indicated_by: actualIndicatedBy,
+        clinic_id: clinicId,
+        status: 'new' as const,
+        establishment_code: establishmentCode, // CORREÇÃO: Usar establishment do consultor
+        // Campos adicionais para tracking
+        original_lead_id: originalLeadId,
+        indication_type: data.indicated_by_type,
+        commission_percentage: data.commission_percentage || 100,
+      }
+
+      const { data: newLead, error } = await supabase
+        .from('leads')
+        .insert(leadData)
+        .select()
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      // Se foi indicado por outro lead, criar registro de indicação
+      if (data.indicated_by_type === 'lead' && originalLeadId) {
+        await supabase
+          .from('lead_indications')
+          .insert({
+            original_lead_id: originalLeadId,
+            new_lead_id: newLead.id,
+            commission_percentage: data.commission_percentage || 50,
+            created_by: profile.id
+          })
+      }
+
+      toast.success('Lead cadastrado com sucesso!')
+      advancedForm.reset()
+      router.push('/dashboard/leads')
+    } catch (error: any) {
+      console.error('Erro ao cadastrar lead:', error)
+      toast.error(error.message || 'Erro ao cadastrar lead')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
-  const getStatusLabel = (status: string) => {
-    const labels: Record<string, string> = {
-      new: 'Novo',
-      contacted: 'Contatado',
-      qualified: 'Qualificado',
-      negotiation: 'Negociação',
-      converted: 'Convertido',
-      lost: 'Perdido'
-    }
-    return labels[status] || status
-  }
+  const filteredConsultants = consultants.filter(consultant =>
+    consultant.full_name.toLowerCase().includes(searchConsultants.toLowerCase()) ||
+    consultant.email.toLowerCase().includes(searchConsultants.toLowerCase())
+  )
 
-  const getStatusColor = (status: string) => {
-    const option = statusOptions.find(opt => opt.value === status)
-    return option?.color || 'secondary'
-  }
+  const filteredLeads = convertedLeads.filter(lead =>
+    lead.full_name.toLowerCase().includes(searchLeads.toLowerCase()) ||
+    lead.phone.includes(searchLeads) ||
+    lead.consultant_name.toLowerCase().includes(searchLeads.toLowerCase())
+  )
 
-  // Filtrar leads com novos filtros
-  const filteredLeads = leads.filter(lead => {
-    const matchesSearch = !searchTerm ||
-      lead.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.phone.includes(searchTerm) ||
-      lead.cpf?.includes(searchTerm)
-
-    const matchesStatus = !statusFilter || lead.status === statusFilter
-
-    // 🔥 CORRIGIDO: Filtrar pelo establishment_name em vez de establishment_code
-    const matchesEstablishment = !establishmentFilter ||
-      (lead.establishment_name && lead.establishment_name === establishmentFilter)
-
-    const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
-
-    const matchesDate = !dateFilter || new Date(lead.created_at).toDateString() === new Date(dateFilter).toDateString()
-
-    return matchesSearch && matchesStatus && matchesEstablishment && matchesConsultant && matchesDate
-  })
-
-
-  const stats = {
-    total: leads.length,
-    new: leads.filter(l => l.status === 'new').length,
-    contacted: leads.filter(l => l.status === 'contacted').length,
-    converted: leads.filter(l => l.status === 'converted').length,
-    conversionRate: leads.length > 0 ? ((leads.filter(l => l.status === 'converted').length / leads.length) * 100).toFixed(1) : '0'
-  }
-
-  const canEdit = profile?.role === 'clinic_admin' || profile?.role === 'manager'
-  const canCreate = profile?.role !== 'clinic_viewer'
-
-  if (loading) {
+  // FORMULÁRIO BÁSICO (consultant)
+  if (!isAdvancedForm) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="loading-spinner w-8 h-8"></div>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
+              <ArrowLeftIcon className="h-4 w-4 mr-2" />
+              Voltar
+            </Link>
+            <div>
+              <h1 className="text-2xl font-bold text-secondary-900">Novo Lead</h1>
+              <p className="text-secondary-600">
+                Cadastre uma nova indicação
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Form */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="card max-w-2xl mx-auto"
+        >
+          <form onSubmit={basicForm.handleSubmit(onBasicSubmit)} className="card-body space-y-6">
+            <div>
+              <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
+                Nome Completo *
+              </label>
+              <input
+                type="text"
+                id="full_name"
+                {...basicForm.register('full_name')}
+                className={`input ${basicForm.formState.errors.full_name ? 'input-error' : ''}`}
+                placeholder="Nome completo do lead"
+              />
+              {basicForm.formState.errors.full_name && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.full_name.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
+                Telefone *
+              </label>
+              <input
+                type="tel"
+                id="phone"
+                {...basicForm.register('phone')}
+                className={`input ${basicForm.formState.errors.phone ? 'input-error' : ''}`}
+                placeholder="(11) 99999-9999"
+              />
+              {basicForm.formState.errors.phone && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.phone.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
+                Email (opcional)
+              </label>
+              <input
+                type="email"
+                id="email"
+                {...basicForm.register('email')}
+                className={`input ${basicForm.formState.errors.email ? 'input-error' : ''}`}
+                placeholder="email@exemplo.com"
+              />
+              {basicForm.formState.errors.email && (
+                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.email.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
+                Observações (opcional)
+              </label>
+              <textarea
+                id="notes"
+                {...basicForm.register('notes')}
+                rows={3}
+                className="input"
+                placeholder="Informações adicionais sobre o lead..."
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
+              <Link href="/dashboard/leads" className="btn btn-secondary">
+                Cancelar
+              </Link>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="btn btn-primary"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="loading-spinner w-4 h-4 mr-2"></div>
+                    Salvando...
+                  </>
+                ) : (
+                  'Cadastrar Lead'
+                )}
+              </button>
+            </div>
+          </form>
+        </motion.div>
       </div>
     )
   }
 
+  // FORMULÁRIO AVANÇADO (admin/manager)
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-secondary-900">
-            {profile?.role === 'consultant' ? 'Meus Leads' : 'Leads'}
-          </h1>
-          <p className="text-secondary-600">
-            {profile?.role === 'consultant'
-              ? 'Gerencie suas indicações e converta seus leads'
-              : 'Gerencie todos os leads da clínica'
-            }
-          </p>
-        </div>
-
-        {canCreate && (
-          <Link href="/dashboard/leads/new" className="btn btn-primary">
-            <PlusIcon className="h-4 w-4 mr-2" />
-            Novo Lead
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
+            <ArrowLeftIcon className="h-4 w-4 mr-2" />
+            Voltar
           </Link>
-        )}
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-primary-600">{stats.total}</span>
-                </div>
-              </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Total</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-primary-600">{stats.new}</span>
-                </div>
-              </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Novos</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-warning-600">{stats.contacted}</span>
-                </div>
-              </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Contatados</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-success-600">{stats.converted}</span>
-                </div>
-              </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Convertidos</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="card"
-        >
-          <div className="card-body">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="w-16 h-8 bg-success-100 rounded-lg flex items-center justify-center">
-                  <span className="text-sm font-bold text-success-600">{stats.conversionRate}%</span>
-                </div>
-              </div>
-              <div className="ml-5">
-                <p className="text-sm font-medium text-secondary-500">Conversão</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Enhanced Filters */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
-        className="card"
-      >
-        <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
-            <div className="relative">
-              <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
-              <input
-                type="text"
-                placeholder="Buscar por nome, email, telefone..."
-                className="input pl-10"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-
-            <select
-              className="input"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="">Todos os status</option>
-              {statusOptions.map(option => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-
-            <select
-              className="input"
-              value={establishmentFilter}
-              onChange={(e) => setEstablishmentFilter(e.target.value)}
-            >
-              <option value="">Todos os estabelecimentos</option>
-              {establishments.map(establishment => (
-                <option key={establishment} value={establishment}>
-                  {establishment}
-                </option>
-              ))}
-            </select>
-
-
-            {(profile?.role === 'clinic_admin' || profile?.role === 'clinic_viewer' || profile?.role === 'manager') && (
-              <select
-                className="input"
-                value={consultantFilter}
-                onChange={(e) => setConsultantFilter(e.target.value)}
-              >
-                <option value="">Todos os consultores</option>
-                {consultants.map(consultant => (
-                  <option key={consultant.id} value={consultant.id}>
-                    {consultant.full_name}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            <input
-              type="date"
-              className="input"
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-            />
-
-            <button
-              onClick={() => {
-                setSearchTerm('')
-                setStatusFilter('')
-                setEstablishmentFilter('')
-                setConsultantFilter('')
-                setDateFilter('')
-              }}
-              className="btn btn-secondary"
-            >
-              <FunnelIcon className="h-4 w-4 mr-2" />
-              Limpar Filtros
-            </button>
+          <div>
+            <h1 className="text-2xl font-bold text-secondary-900">
+              Novo Lead {profile?.role === 'manager' ? '(Gerente)' : '(Admin)'}
+            </h1>
+            <p className="text-secondary-600">
+              {profile?.role === 'manager' 
+                ? 'Cadastre uma nova indicação para sua equipe'
+                : 'Cadastre uma nova indicação com controle de comissão'
+              }
+            </p>
           </div>
         </div>
-      </motion.div>
+      </div>
 
-      {/* Enhanced Leads Table */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.6 }}
-        className="card"
-      >
-        <div className="card-body p-0">
-          <div className="overflow-x-auto">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Nome</th>
-                  <th>Contato</th>
-                  <th>Status</th>
-                  {profile?.role !== 'consultant' && <th>Indicado por</th>}
-                  <th>Data</th>
-                  <th>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLeads.map((lead) => (
-                  <tr key={lead.id}>
-                    <td>
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0">
-                          <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center">
-                            <UserIcon className="h-5 w-5 text-white" />
-                          </div>
-                        </div>
-                        <div className="ml-4">
-                          <div className="font-medium text-secondary-900">
-                            {lead.full_name}
-                          </div>
-                          {lead.age && (
-                            <div className="text-sm text-secondary-500">
-                              {lead.age} anos
-                              {lead.gender && (
-                                <span className="ml-1">
-                                  • {lead.gender === 'male' ? 'M' : lead.gender === 'female' ? 'F' : 'Outro'}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {/* 🔥 NOVO: Mostrar arcadas se convertido */}
-                          {lead.status === 'converted' && lead.arcadas_vendidas && (
-                            <div className="flex items-center mt-1">
-                              <StarIcon className="h-3 w-3 text-success-500 mr-1" />
-                              <span className="text-xs text-success-600 font-medium">
-                                {lead.arcadas_vendidas} arcada{lead.arcadas_vendidas > 1 ? 's' : ''} vendida{lead.arcadas_vendidas > 1 ? 's' : ''}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="space-y-1">
-                        <div className="flex items-center">
-                          <PhoneIcon className="h-3 w-3 text-secondary-400 mr-1" />
-                          <span className="text-sm">{lead.phone}</span>
-                        </div>
-                        {lead.email && (
-                          <div className="flex items-center">
-                            <EnvelopeIcon className="h-3 w-3 text-secondary-400 mr-1" />
-                            <span className="text-sm">{lead.email}</span>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      {canEdit ? (
-                        <select
-                          value={lead.status}
-                          onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
-                          disabled={updatingStatus === lead.id}
-                          className={`badge badge-${getStatusColor(lead.status)} cursor-pointer hover:opacity-80 border-0 text-xs`}
-                        >
-                          {statusOptions.map(option => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className={`badge badge-${getStatusColor(lead.status)} flex items-center`}>
-                          {getStatusIcon(lead.status)}
-                          <span className="ml-1">
-                            {statusOptions.find(opt => opt.value === lead.status)?.label}
-                          </span>
-                        </span>
-                      )}
-                    </td>
-                    {profile?.role !== 'consultant' && (
-                      <td>
-                        <div className="flex items-center">
-                          <div className="h-8 w-8 rounded-full bg-success-600 flex items-center justify-center mr-3">
-                            <span className="text-xs font-medium text-white">
-                              {lead.users?.full_name.charAt(0).toUpperCase()}
-                            </span>
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-secondary-900">
-                              {lead.users?.full_name}
-                            </div>
-                            <div className="text-xs text-secondary-500">
-                              {lead.users?.email}
-                            </div>
-                            {/* 🔥 NOVO: Mostrar estabelecimento */}
-                            {lead.establishment_name && (
-                              <div className="text-xs text-primary-600 mt-1">
-                                📍 {lead.establishment_name}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                    )}
-                    <td>
-                      <div className="text-sm text-secondary-900">
-                        {new Date(lead.created_at).toLocaleDateString('pt-BR')}
-                      </div>
-                      <div className="text-xs text-secondary-500">
-                        {new Date(lead.created_at).toLocaleTimeString('pt-BR', {
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </div>
-                      {/* 🔥 NOVO: Mostrar data de conversão */}
-                      {lead.status === 'converted' && lead.converted_at && (
-                        <div className="text-xs text-success-600 mt-1">
-                          💰 Convertido em {new Date(lead.converted_at).toLocaleDateString('pt-BR')}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <div className="flex items-center space-x-2">
-                        {/* 🔥 NOVO: Botão de conversão rápida para consultores */}
-                        {profile?.role === 'clinic_admin' && lead.status !== 'converted' && lead.status !== 'lost' && (
-                          <button
-                            onClick={() => handleQuickConvert(lead)}
-                            className="btn btn-success btn-sm"
-                            title="Converter Lead"
-                          >
-                            <PlayIcon className="h-4 w-4" />
-                          </button>
-                        )}
+      {/* Debug Info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-yellow-800 mb-2">Debug Info</h4>
+          <div className="text-xs text-yellow-700 space-y-1">
+            <div>Profile ID: {profile?.id}</div>
+            <div>Profile Role: {profile?.role}</div>
+            <div>Clinic ID: {clinicId || 'Carregando...'}</div>
+            <div>Consultores: {consultants.length}</div>
+            <div>Leads convertidos: {convertedLeads.length}</div>
+            <div>Tipo selecionado: {indicatedByType}</div>
+            <div>ID selecionado: {indicatedById}</div>
+          </div>
+        </div>
+      )}
 
+      {/* Loading enquanto busca clinicId */}
+      {!clinicId && (
+        <div className="flex items-center justify-center py-12">
+          <div className="loading-spinner w-6 h-6 mr-3"></div>
+          <span className="text-secondary-600">Carregando dados da clínica...</span>
+        </div>
+      )}
 
-
-                        <button
-                          onClick={() => handleViewLead(lead.id)}
-                          className="btn btn-ghost btn-sm"
-                          title="Visualizar"
-                        >
-                          <EyeIcon className="h-4 w-4" />
-                        </button>
-                        {canEdit && (
-                          <Link
-                            href={`/dashboard/leads/${lead.id}/edit`}
-                            className="btn btn-ghost btn-sm"
-                            title="Editar"
-                          >
-                            <PencilIcon className="h-4 w-4" />
-                          </Link>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {filteredLeads.length === 0 && (
-              <div className="text-center py-12">
-                <div className="text-secondary-400 mb-4">
-                  {leads.length === 0 ? (
-                    <ClockIcon className="mx-auto h-12 w-12" />
-                  ) : (
-                    <MagnifyingGlassIcon className="mx-auto h-12 w-12" />
+      {/* Form - só renderiza quando tem clinicId */}
+      {clinicId && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="card max-w-4xl mx-auto"
+        >
+          <form onSubmit={advancedForm.handleSubmit(onAdvancedSubmit)} className="card-body space-y-8">
+            {/* Dados do Lead */}
+            <div>
+              <h3 className="text-lg font-medium text-secondary-900 mb-4">
+                Dados do Lead
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Nome Completo *
+                  </label>
+                  <input
+                    type="text"
+                    id="full_name"
+                    {...advancedForm.register('full_name')}
+                    className={`input ${advancedForm.formState.errors.full_name ? 'input-error' : ''}`}
+                    placeholder="Nome completo do lead"
+                  />
+                  {advancedForm.formState.errors.full_name && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.full_name.message}</p>
                   )}
                 </div>
-                <h3 className="text-sm font-medium text-secondary-900 mb-1">
-                  {leads.length === 0 ? 'Nenhum lead encontrado' : 'Nenhum resultado encontrado'}
-                </h3>
-                <p className="text-sm text-secondary-500">
-                  {leads.length === 0
-                    ? 'Comece criando seu primeiro lead.'
-                    : 'Tente ajustar os filtros ou termo de busca.'
-                  }
-                </p>
-                {leads.length === 0 && canCreate && (
-                  <Link
-                    href="/dashboard/leads/new"
-                    className="btn btn-primary mt-4"
+
+                <div>
+                  <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Telefone *
+                  </label>
+                  <input
+                    type="tel"
+                    id="phone"
+                    {...advancedForm.register('phone')}
+                    className={`input ${advancedForm.formState.errors.phone ? 'input-error' : ''}`}
+                    placeholder="(11) 99999-9999"
+                  />
+                  {advancedForm.formState.errors.phone && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.phone.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Email (opcional)
+                  </label>
+                  <input
+                    type="email"
+                    id="email"
+                    {...advancedForm.register('email')}
+                    className={`input ${advancedForm.formState.errors.email ? 'input-error' : ''}`}
+                    placeholder="email@exemplo.com"
+                  />
+                  {advancedForm.formState.errors.email && (
+                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.email.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
+                    Observações (opcional)
+                  </label>
+                  <textarea
+                    id="notes"
+                    {...advancedForm.register('notes')}
+                    rows={3}
+                    className="input"
+                    placeholder="Informações adicionais sobre o lead..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Quem Indicou */}
+            <div>
+              <h3 className="text-lg font-medium text-secondary-900 mb-4">
+                Quem Indicou Este Lead?
+              </h3>
+
+              {/* Tipo de Indicação */}
+              <div className="mb-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    type="button"
+                    onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
+                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'consultant'
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-300 hover:border-gray-400'
+                      }`}
                   >
-                    <PlusIcon className="h-4 w-4 mr-2" />
-                    Criar Primeiro Lead
-                  </Link>
-                )}
+                    <UserIcon className="h-8 w-8 mx-auto mb-2 text-primary-600" />
+                    <div className="text-sm font-medium">Consultor Direto</div>
+                    <div className="text-xs text-gray-500 mt-1">100% da comissão</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
+                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'lead'
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                  >
+                    <CurrencyDollarIcon className="h-8 w-8 mx-auto mb-2 text-success-600" />
+                    <div className="text-sm font-medium">Lead Convertido</div>
+                    <div className="text-xs text-gray-500 mt-1">% editável da comissão</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Seleção de Consultor */}
+              {indicatedByType === 'consultant' && (
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Selecionar Consultor *
+                  </label>
+                  <div className="relative mb-4">
+                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar consultor por nome ou email..."
+                      className="input pl-10"
+                      value={searchConsultants}
+                      onChange={(e) => setSearchConsultants(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                    {filteredConsultants.map((consultant) => (
+                      <div
+                        key={consultant.id}
+                        onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
+                          }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="font-medium text-gray-900">{consultant.full_name}</div>
+                            <div className="text-sm text-gray-500">{consultant.email}</div>
+                            <div className="text-xs text-primary-600">{consultant.establishment_name}</div>
+                          </div>
+                          {indicatedById === consultant.id && (
+                            <div className="w-6 h-6 bg-primary-600 rounded-full flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {filteredConsultants.length === 0 && (
+                      <div className="p-4 text-center text-gray-500">
+                        {consultants.length === 0 ? (
+                          profile?.role === 'manager' 
+                            ? 'Nenhum consultor em sua equipe'
+                            : 'Nenhum consultor encontrado'
+                        ) : (
+                          'Nenhum consultor encontrado com esse termo'
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Seleção de Lead */}
+              {indicatedByType === 'lead' && (
+                <div>
+                  <label className="block text-sm font-medium text-secondary-700 mb-2">
+                    Selecionar Lead Convertido *
+                  </label>
+                  <div className="relative mb-4">
+                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar lead por nome, telefone ou consultor..."
+                      className="input pl-10"
+                      value={searchLeads}
+                      onChange={(e) => setSearchLeads(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                    {filteredLeads.map((lead) => (
+                      <div
+                        key={lead.id}
+                        onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
+                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
+                          }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium text-gray-900">{lead.full_name}</div>
+                            <div className="text-sm text-gray-500">{lead.phone}</div>
+                            <div className="text-xs text-success-600">
+                              Convertido por: {lead.consultant_name}
+                            </div>
+                          </div>
+                          {indicatedById === lead.id && (
+                            <div className="w-6 h-6 bg-success-600 rounded-full flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {filteredLeads.length === 0 && (
+                      <div className="p-4 text-center text-gray-500">
+                        Nenhum lead convertido encontrado
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Percentual de Comissão */}
+                  {indicatedById && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Percentual da Comissão (%)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        {...advancedForm.register('commission_percentage', { valueAsNumber: true })}
+                        className="input w-32"
+                        placeholder="50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Percentual da comissão que será paga ao consultor
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {advancedForm.formState.errors.indicated_by_id && (
+                <p className="mt-2 text-sm text-danger-600">{advancedForm.formState.errors.indicated_by_id.message}</p>
+              )}
+            </div>
+
+            {/* Preview da Comissão */}
+            {commissionPreview && (
+              <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-primary-900 mb-3">Preview da Comissão</h4>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <div className="text-gray-600">Valor Base</div>
+                    <div className="font-medium">R$ {commissionPreview.baseValue.toFixed(2)}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-600">Percentual</div>
+                    <div className="font-medium">{commissionPreview.percentage}%</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-600">Valor Final</div>
+                    <div className="font-bold text-primary-700">R$ {commissionPreview.finalValue.toFixed(2)}</div>
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        </div>
-      </motion.div>
 
-
-
-      {/* Lead Detail Modal */}
-      <LeadDetailModal
-        isOpen={isModalOpen}
-        onClose={handleCloseModal}
-        leadId={selectedLeadId}
-        onLeadUpdate={fetchLeads}
-      />
-
-      {/* 🔥 MODAL DE ARCADAS MELHORADO */}
-      {showArcadasModal && selectedLeadForConversion && (
-        <ArcadasModal
-          isOpen={showArcadasModal}
-          onClose={() => {
-            setShowArcadasModal(false)
-            setSelectedLeadForConversion(null)
-          }}
-          onConfirm={handleConfirmConversion}
-          leadName={selectedLeadForConversion.full_name}
-          establishmentCode={selectedLeadForConversion.establishment_code}
-          consultantId={selectedLeadForConversion.indicated_by}
-        />
+            {/* Actions */}
+            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
+              <Link href="/dashboard/leads" className="btn btn-secondary">
+                Cancelar
+              </Link>
+              <button
+                type="submit"
+                disabled={isSubmitting || !indicatedById}
+                className="btn btn-primary"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="loading-spinner w-4 h-4 mr-2"></div>
+                    Salvando...
+                  </>
+                ) : (
+                  'Cadastrar Lead'
+                )}
+              </button>
+            </div>
+          </form>
+        </motion.div>
       )}
     </div>
   )
