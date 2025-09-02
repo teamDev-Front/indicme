@@ -832,7 +832,7 @@ export default function LeadsPage() {
                       ) : (
                         <div className="text-center">
                           <div className="text-sm text-secondary-500">Aguardando</div>
-                          {canEdit && lead.status !== 'converted' && lead.status !== 'lost' && (
+                          {canEdit && (
                             <button
                               onClick={() => handleConvertLead(lead)}
                               className="text-xs text-success-600 hover:text-success-700 mt-1 block"
