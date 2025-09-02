@@ -175,45 +175,43 @@ export default function LeadsListingPage() {
     }
   }
 
-  const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => {
-    if (newStatus === 'converted') {
-      const lead = leads.find(l => l.id === leadId)
-      if (lead) {
-        setLeadForConversion(lead)
-        setIsArcadasModalOpen(true)
-      }
-      return
+const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => {
+  if (newStatus === 'converted') {
+    const lead = leads.find(l => l.id === leadId)
+    if (lead) {
+      setLeadForConversion(lead)
+      setIsArcadasModalOpen(true)
     }
-
-    try {
-      const { error } = await supabase
-        .from('leads')
-        .update({ 
-          status: newStatus,
-          updated_at: new Date().toISOString(),
-          ...(newStatus === 'converted' ? { converted_at: new Date().toISOString() } : {})
-        })
-        .eq('id', leadId)
-
-      if (error) throw error
-
-      setLeads(prev => prev.map(lead =>
-        lead.id === leadId
-          ? { 
-              ...lead, 
-              status: newStatus,
-              updated_at: new Date().toISOString(),
-              ...(newStatus === 'converted' ? { converted_at: new Date().toISOString() } : {})
-            }
-          : lead
-      ))
-
-      toast.success('Status atualizado com sucesso!')
-    } catch (error: any) {
-      console.error('Erro ao atualizar status:', error)
-      toast.error('Erro ao atualizar status')
-    }
+    return
   }
+
+  try {
+    const { error } = await supabase
+      .from('leads')
+      .update({ 
+        status: newStatus,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', leadId)
+
+    if (error) throw error
+
+    setLeads(prev => prev.map(lead =>
+      lead.id === leadId
+        ? { 
+            ...lead, 
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          }
+        : lead
+    ))
+
+    toast.success('Status atualizado com sucesso!')
+  } catch (error: any) {
+    console.error('Erro ao atualizar status:', error)
+    toast.error('Erro ao atualizar status')
+  }
+}
 
   const handleArcadasConfirm = async (arcadas: number) => {
     if (!leadForConversion) return
