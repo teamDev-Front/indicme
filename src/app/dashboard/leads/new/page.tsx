@@ -1,4 +1,4 @@
-// src/app/dashboard/leads/new/page.tsx - VERSÃO COMPLETA CORRIGIDA
+// src/app/dashboard/leads/new/page.tsx - PÁGINA DE CRIAÇÃO (mover lógica atual para cá)
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -56,7 +56,7 @@ export default function NewLeadPage() {
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Estados para formulário avançado (admin)
+  // Estados para formulário avançado (admin/manager)
   const [consultants, setConsultants] = useState<Consultant[]>([])
   const [convertedLeads, setConvertedLeads] = useState<ConvertedLead[]>([])
   const [searchConsultants, setSearchConsultants] = useState('')
@@ -69,20 +69,19 @@ export default function NewLeadPage() {
     finalValue: number
   } | null>(null)
 
-  // 🔧 CORREÇÃO: Adicionar estado para clinicId
   const [clinicId, setClinicId] = useState<string>('')
 
   const supabase = createClient()
 
   // Determinar qual formulário mostrar
-  const isAdvancedForm = profile?.role === 'clinic_admin'
+  const isAdvancedForm = profile?.role === 'clinic_admin' || profile?.role === 'manager'
 
-  // Formulário básico (consultant/manager)
+  // Formulário básico (consultant)
   const basicForm = useForm<BasicLeadFormData>({
     resolver: zodResolver(basicLeadSchema),
   })
 
-  // Formulário avançado (admin)
+  // Formulário avançado (admin/manager)
   const advancedForm = useForm<AdvancedLeadFormData>({
     resolver: zodResolver(advancedLeadSchema),
     defaultValues: {
@@ -95,7 +94,7 @@ export default function NewLeadPage() {
   const indicatedById = advancedForm.watch('indicated_by_id')
   const commissionPercentage = advancedForm.watch('commission_percentage')
 
-  // 🔧 CORREÇÃO: Buscar clinicId primeiro
+  // Buscar clinicId primeiro
   useEffect(() => {
     if (profile) {
       fetchClinicId()
@@ -122,7 +121,6 @@ export default function NewLeadPage() {
     }
   }, [indicatedById, commissionPercentage, selectedEstablishment, isAdvancedForm])
 
-  // 🔧 CORREÇÃO: Nova função para buscar clinicId
   const fetchClinicId = async () => {
     try {
       console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
@@ -162,22 +160,56 @@ export default function NewLeadPage() {
     }
   }
 
-  // Substituir a função fetchConsultants no arquivo src/app/dashboard/leads/new/page.tsx
-
   const fetchConsultants = async () => {
     try {
-      console.log('🔍 Buscando TODOS os consultores da base...')
+      console.log('🔍 Buscando consultores para role:', profile?.role)
 
-      // Query simples: buscar TODOS os consultores
-      const { data, error } = await supabase
+      let consultantsQuery = supabase
         .from('users')
-        .select('id, full_name, email')
+        .select(`
+          id,
+          full_name,
+          email,
+          user_clinics!inner(clinic_id)
+        `)
+        .eq('user_clinics.clinic_id', clinicId)
         .eq('role', 'consultant')
         .eq('status', 'active')
         .order('full_name')
 
+      // Para managers, filtrar apenas sua equipe
+      if (profile?.role === 'manager') {
+        console.log('👑 Usuário é manager, buscando apenas sua equipe...')
+        
+        const { data: hierarchyData, error: hierarchyError } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+
+        if (hierarchyError) {
+          console.error('❌ Erro ao buscar hierarquia:', hierarchyError)
+          toast.error('Erro ao buscar sua equipe')
+          setConsultants([])
+          return
+        }
+
+        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
+        
+        if (consultantIds.length === 0) {
+          console.log('⚠️ Manager não possui equipe')
+          toast.error('Você não possui consultores em sua equipe')
+          setConsultants([])
+          return
+        }
+
+        consultantsQuery = consultantsQuery.in('id', consultantIds)
+      }
+
+      const { data, error } = await consultantsQuery
+
       if (error) {
         console.error('❌ Erro ao buscar consultores:', error)
+        setConsultants([])
         return
       }
 
@@ -185,30 +217,70 @@ export default function NewLeadPage() {
 
       if (!data || data.length === 0) {
         console.log('⚠️ Nenhum consultor encontrado')
+        const message = profile?.role === 'manager' 
+          ? 'Nenhum consultor encontrado em sua equipe'
+          : 'Nenhum consultor encontrado'
+        toast.error(message)
         setConsultants([])
         return
       }
 
-      // Mapear para o formato esperado
-      const consultantsData = data.map(consultant => ({
-        id: consultant.id,
-        full_name: consultant.full_name,
-        email: consultant.email,
-        establishment_name: 'Consultor' // Placeholder simples
-      }))
+      // Para cada consultor, buscar estabelecimento
+      const consultantsWithEstablishments = await Promise.all(
+        data.map(async (consultant) => {
+          try {
+            const { data: userEstablishment } = await supabase
+              .from('user_establishments')
+              .select(`
+                establishment_code,
+                establishment_codes!user_establishments_establishment_code_fkey (
+                  name
+                )
+              `)
+              .eq('user_id', consultant.id)
+              .eq('status', 'active')
+              .single()
 
-      console.log('✅ Consultores mapeados:', consultantsData.length)
-      setConsultants(consultantsData)
+            let establishmentName = 'Sem estabelecimento'
+            if (userEstablishment?.establishment_codes) {
+              const estData = Array.isArray(userEstablishment.establishment_codes)
+                ? userEstablishment.establishment_codes[0]
+                : userEstablishment.establishment_codes
+              
+              establishmentName = estData?.name || 'Estabelecimento não identificado'
+            }
+
+            return {
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
+              establishment_name: establishmentName
+            }
+          } catch (error) {
+            console.warn('Erro ao buscar estabelecimento do consultor:', consultant.id, error)
+            return {
+              id: consultant.id,
+              full_name: consultant.full_name,
+              email: consultant.email,
+              establishment_name: 'Erro ao carregar estabelecimento'
+            }
+          }
+        })
+      )
+
+      console.log('✅ Consultores com estabelecimentos processados:', consultantsWithEstablishments.length)
+      setConsultants(consultantsWithEstablishments)
 
     } catch (error) {
       console.error('❌ Erro geral ao buscar consultores:', error)
       setConsultants([])
+      toast.error('Erro ao carregar consultores')
     }
   }
   
   const fetchConvertedLeads = async () => {
     try {
-      const { data, error } = await supabase
+      let leadsQuery = supabase
         .from('leads')
         .select(`
           id,
@@ -225,13 +297,29 @@ export default function NewLeadPage() {
         .order('created_at', { ascending: false })
         .limit(50)
 
+      // Para managers, filtrar apenas leads da equipe
+      if (profile?.role === 'manager') {
+        const { data: hierarchyData } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+
+        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id) // Incluir próprios leads do manager
+
+        if (consultantIds.length > 0) {
+          leadsQuery = leadsQuery.in('indicated_by', consultantIds)
+        }
+      }
+
+      const { data, error } = await leadsQuery
+
       if (error) {
         console.error('Erro ao buscar leads convertidos:', error)
         return
       }
 
       const leadsData = data?.map(lead => {
-        // Corrigir tipos TypeScript
         const users = lead.users as any[]
         const user = Array.isArray(users) ? users[0] : users
 
@@ -289,7 +377,7 @@ export default function NewLeadPage() {
     })
   }
 
-  // Submit para formulário básico (consultant/manager)
+  // Submit para formulário básico (consultant)
   const onBasicSubmit = async (data: BasicLeadFormData) => {
     if (!profile || !clinicId) {
       toast.error('Dados do usuário ou clínica não encontrados')
@@ -339,7 +427,7 @@ export default function NewLeadPage() {
     }
   }
 
-  // Submit para formulário avançado (admin)
+  // Submit para formulário avançado (admin/manager)
   const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
     if (!profile || !clinicId) {
       toast.error('Dados do usuário ou clínica não encontrados')
@@ -362,6 +450,19 @@ export default function NewLeadPage() {
         }
       }
 
+      // Buscar establishment_code do consultor selecionado
+      let establishmentCode = null
+      const { data: consultantEstablishment } = await supabase
+        .from('user_establishments')
+        .select('establishment_code')
+        .eq('user_id', actualIndicatedBy)
+        .eq('status', 'active')
+        .single()
+
+      if (consultantEstablishment) {
+        establishmentCode = consultantEstablishment.establishment_code
+      }
+
       // Preparar dados do lead
       const leadData = {
         full_name: data.full_name,
@@ -371,6 +472,7 @@ export default function NewLeadPage() {
         indicated_by: actualIndicatedBy,
         clinic_id: clinicId,
         status: 'new' as const,
+        establishment_code: establishmentCode,
         // Campos adicionais para tracking
         original_lead_id: originalLeadId,
         indication_type: data.indicated_by_type,
@@ -421,7 +523,7 @@ export default function NewLeadPage() {
     lead.consultant_name.toLowerCase().includes(searchLeads.toLowerCase())
   )
 
-  // FORMULÁRIO BÁSICO (consultant/manager)
+  // FORMULÁRIO BÁSICO (consultant)
   if (!isAdvancedForm) {
     return (
       <div className="space-y-6">
@@ -536,7 +638,7 @@ export default function NewLeadPage() {
     )
   }
 
-  // FORMULÁRIO AVANÇADO (admin) - mantém o código existente
+  // FORMULÁRIO AVANÇADO (admin/manager)
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -548,10 +650,13 @@ export default function NewLeadPage() {
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-secondary-900">
-              Novo Lead (Admin)
+              Novo Lead {profile?.role === 'manager' ? '(Gerente)' : '(Admin)'}
             </h1>
             <p className="text-secondary-600">
-              Cadastre uma nova indicação com controle de comissão
+              {profile?.role === 'manager' 
+                ? 'Cadastre uma nova indicação para sua equipe'
+                : 'Cadastre uma nova indicação com controle de comissão'
+              }
             </p>
           </div>
         </div>
@@ -563,6 +668,7 @@ export default function NewLeadPage() {
           <h4 className="text-sm font-medium text-yellow-800 mb-2">Debug Info</h4>
           <div className="text-xs text-yellow-700 space-y-1">
             <div>Profile ID: {profile?.id}</div>
+            <div>Profile Role: {profile?.role}</div>
             <div>Clinic ID: {clinicId || 'Carregando...'}</div>
             <div>Consultores: {consultants.length}</div>
             <div>Leads convertidos: {convertedLeads.length}</div>
@@ -738,7 +844,13 @@ export default function NewLeadPage() {
                     ))}
                     {filteredConsultants.length === 0 && (
                       <div className="p-4 text-center text-gray-500">
-                        Nenhum consultor encontrado
+                        {consultants.length === 0 ? (
+                          profile?.role === 'manager' 
+                            ? 'Nenhum consultor em sua equipe'
+                            : 'Nenhum consultor encontrado'
+                        ) : (
+                          'Nenhum consultor encontrado com esse termo'
+                        )}
                       </div>
                     )}
                   </div>
@@ -770,7 +882,7 @@ export default function NewLeadPage() {
                         className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
                           }`}
                       >
-                        <div className="flex justify-between items-center">
+                        <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium text-gray-900">{lead.full_name}</div>
                             <div className="text-sm text-gray-500">{lead.phone}</div>

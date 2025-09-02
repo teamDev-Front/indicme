@@ -1,992 +1,801 @@
-// src/app/dashboard/leads/new/page.tsx - FUNÇÃO fetchConsultants CORRIGIDA
+// src/app/dashboard/leads/page.tsx - NOVA VERSÃO COM LISTAGEM COMPLETA
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
-import { ArrowLeftIcon, MagnifyingGlassIcon, UserIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
+import {
+  UserPlusIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  EyeIcon,
+  PencilIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  XCircleIcon,
+  PhoneIcon,
+  EnvelopeIcon,
+  CalendarIcon,
+  ChartBarIcon,
+  UserIcon,
+  ExclamationTriangleIcon,
+  ArrowTrendingUpIcon,
+  TrophyIcon,
+  CurrencyDollarIcon
+} from '@heroicons/react/24/outline'
 import Link from 'next/link'
+import toast from 'react-hot-toast'
+import LeadDetailModal from '@/components/leads/LeadDetailModal'
+import ArcadasModal from '@/components/leads/ArcadasModal'
 
-// Schemas para validação
-const basicLeadSchema = z.object({
-  full_name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
-  phone: z.string().min(10, 'Telefone deve ter pelo menos 10 dígitos'),
-  email: z.string().email('Email inválido').optional().or(z.literal('')),
-  notes: z.string().optional(),
-})
-
-const advancedLeadSchema = basicLeadSchema.extend({
-  indicated_by_type: z.enum(['consultant', 'lead']),
-  indicated_by_id: z.string().min(1, 'Selecione quem indicou'),
-  commission_percentage: z.number().min(0).max(100).optional(),
-})
-
-type BasicLeadFormData = z.infer<typeof basicLeadSchema>
-type AdvancedLeadFormData = z.infer<typeof advancedLeadSchema>
-
-interface Consultant {
+interface Lead {
   id: string
   full_name: string
-  email: string
-  establishment_name?: string
-}
-
-interface ConvertedLead {
-  id: string
-  full_name: string
+  email: string | null
   phone: string
+  status: 'new' | 'contacted' | 'scheduled' | 'converted' | 'lost'
+  created_at: string
+  updated_at: string
+  converted_at?: string
+  arcadas_vendidas?: number
+  notes?: string
   indicated_by: string
-  consultant_name: string
-  consultant_email: string
+  clinic_id: string
+  establishment_code?: string
+  users?: {
+    full_name: string
+    email: string
+  }
 }
 
-interface EstablishmentCommission {
-  consultant_value_per_arcada: number
-  establishment_code: string
-}
-
-export default function NewLeadPage() {
+export default function LeadsListingPage() {
   const { profile } = useAuth()
-  const router = useRouter()
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  // Estados para formulário avançado (admin/manager)
-  const [consultants, setConsultants] = useState<Consultant[]>([])
-  const [convertedLeads, setConvertedLeads] = useState<ConvertedLead[]>([])
-  const [searchConsultants, setSearchConsultants] = useState('')
-  const [searchLeads, setSearchLeads] = useState('')
-  const [establishments, setEstablishments] = useState<EstablishmentCommission[]>([])
-  const [selectedEstablishment, setSelectedEstablishment] = useState<string>('')
-  const [commissionPreview, setCommissionPreview] = useState<{
-    baseValue: number
-    percentage: number
-    finalValue: number
-  } | null>(null)
-
-  const [clinicId, setClinicId] = useState<string>('')
-
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [consultantFilter, setConsultantFilter] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+  const [isArcadasModalOpen, setIsArcadasModalOpen] = useState(false)
+  const [leadForConversion, setLeadForConversion] = useState<Lead | null>(null)
+  const [consultants, setConsultants] = useState<Array<{ id: string, full_name: string }>>([])
   const supabase = createClient()
 
-  // Determinar qual formulário mostrar
-  // Manager também deve ter acesso ao formulário avançado
-  const isAdvancedForm = profile?.role === 'clinic_admin' || profile?.role === 'manager'
-
-  // Formulário básico (consultant)
-  const basicForm = useForm<BasicLeadFormData>({
-    resolver: zodResolver(basicLeadSchema),
-  })
-
-  // Formulário avançado (admin/manager)
-  const advancedForm = useForm<AdvancedLeadFormData>({
-    resolver: zodResolver(advancedLeadSchema),
-    defaultValues: {
-      indicated_by_type: 'consultant',
-      commission_percentage: 100,
-    }
-  })
-
-  const indicatedByType = advancedForm.watch('indicated_by_type')
-  const indicatedById = advancedForm.watch('indicated_by_id')
-  const commissionPercentage = advancedForm.watch('commission_percentage')
-
-  // Buscar clinicId primeiro
   useEffect(() => {
     if (profile) {
-      fetchClinicId()
+      fetchLeads()
+      fetchConsultants()
     }
   }, [profile])
 
-  useEffect(() => {
-    if (isAdvancedForm && clinicId) {
-      fetchAdvancedData()
-    }
-  }, [isAdvancedForm, clinicId])
-
-  useEffect(() => {
-    if (indicatedByType === 'lead') {
-      advancedForm.setValue('commission_percentage', 50)
-    } else {
-      advancedForm.setValue('commission_percentage', 100)
-    }
-  }, [indicatedByType, advancedForm])
-
-  useEffect(() => {
-    if (isAdvancedForm) {
-      updateCommissionPreview()
-    }
-  }, [indicatedById, commissionPercentage, selectedEstablishment, isAdvancedForm])
-
-  const fetchClinicId = async () => {
+  const fetchLeads = async () => {
     try {
-      console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
+      setLoading(true)
+      console.log('🔍 Buscando leads para role:', profile?.role)
 
-      const { data: userClinic, error } = await supabase
+      // Buscar clínica do usuário
+      const { data: userClinic } = await supabase
         .from('user_clinics')
         .select('clinic_id')
         .eq('user_id', profile?.id)
         .single()
 
-      if (error || !userClinic) {
-        console.error('❌ Erro ao buscar clínica:', error)
-        toast.error('Erro: Usuário não está associado a uma clínica')
+      if (!userClinic) {
+        toast.error('Clínica não encontrada')
         return
       }
 
-      console.log('✅ Clinic ID encontrado:', userClinic.clinic_id)
-      setClinicId(userClinic.clinic_id)
-    } catch (error) {
-      console.error('❌ Erro ao buscar clinic_id:', error)
-      toast.error('Erro ao carregar dados da clínica')
-    }
-  }
-
-  const fetchAdvancedData = async () => {
-    if (!profile?.id || !clinicId) return
-
-    try {
-      await Promise.all([
-        fetchConsultants(),
-        fetchConvertedLeads(),
-        fetchEstablishments()
-      ])
-    } catch (error) {
-      console.error('Erro ao buscar dados:', error)
-      toast.error('Erro ao carregar dados do formulário')
-    }
-  }
-
-  // CORREÇÃO PRINCIPAL: Função fetchConsultants corrigida para managers
-  const fetchConsultants = async () => {
-    try {
-      console.log('🔍 Buscando consultores para role:', profile?.role)
-
-      let consultantsQuery = supabase
-        .from('users')
-        .select(`
-          id,
-          full_name,
-          email,
-          user_clinics!inner(clinic_id)
-        `)
-        .eq('user_clinics.clinic_id', clinicId)
-        .eq('role', 'consultant')
-        .eq('status', 'active')
-        .order('full_name')
-
-      // CORREÇÃO: Para managers, filtrar apenas sua equipe
-      if (profile?.role === 'manager') {
-        console.log('👑 Usuário é manager, buscando apenas sua equipe...')
-        
-        // Buscar consultores da equipe do manager
-        const { data: hierarchyData, error: hierarchyError } = await supabase
-          .from('hierarchies')
-          .select('consultant_id')
-          .eq('manager_id', profile.id)
-
-        if (hierarchyError) {
-          console.error('❌ Erro ao buscar hierarquia:', hierarchyError)
-          toast.error('Erro ao buscar sua equipe')
-          setConsultants([])
-          return
-        }
-
-        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
-        
-        if (consultantIds.length === 0) {
-          console.log('⚠️ Manager não possui equipe')
-          toast.error('Você não possui consultores em sua equipe')
-          setConsultants([])
-          return
-        }
-
-        console.log('✅ Consultores da equipe encontrados:', consultantIds.length)
-
-        // Filtrar apenas os consultores da equipe
-        consultantsQuery = consultantsQuery.in('id', consultantIds)
-      }
-
-      const { data, error } = await consultantsQuery
-
-      if (error) {
-        console.error('❌ Erro ao buscar consultores:', error)
-        setConsultants([])
-        return
-      }
-
-      console.log('✅ Consultores encontrados:', data?.length || 0)
-
-      if (!data || data.length === 0) {
-        console.log('⚠️ Nenhum consultor encontrado')
-        const message = profile?.role === 'manager' 
-          ? 'Nenhum consultor encontrado em sua equipe'
-          : 'Nenhum consultor encontrado'
-        toast.error(message)
-        setConsultants([])
-        return
-      }
-
-      // Para cada consultor, buscar estabelecimento
-      const consultantsWithEstablishments = await Promise.all(
-        data.map(async (consultant) => {
-          try {
-            // Buscar estabelecimento do consultor
-            const { data: userEstablishment } = await supabase
-              .from('user_establishments')
-              .select(`
-                establishment_code,
-                establishment_codes!user_establishments_establishment_code_fkey (
-                  name
-                )
-              `)
-              .eq('user_id', consultant.id)
-              .eq('status', 'active')
-              .single()
-
-            let establishmentName = 'Sem estabelecimento'
-            if (userEstablishment?.establishment_codes) {
-              const estData = Array.isArray(userEstablishment.establishment_codes)
-                ? userEstablishment.establishment_codes[0]
-                : userEstablishment.establishment_codes
-              
-              establishmentName = estData?.name || 'Estabelecimento não identificado'
-            }
-
-            return {
-              id: consultant.id,
-              full_name: consultant.full_name,
-              email: consultant.email,
-              establishment_name: establishmentName
-            }
-          } catch (error) {
-            console.warn('Erro ao buscar estabelecimento do consultor:', consultant.id, error)
-            return {
-              id: consultant.id,
-              full_name: consultant.full_name,
-              email: consultant.email,
-              establishment_name: 'Erro ao carregar estabelecimento'
-            }
-          }
-        })
-      )
-
-      console.log('✅ Consultores com estabelecimentos processados:', consultantsWithEstablishments.length)
-      setConsultants(consultantsWithEstablishments)
-
-    } catch (error) {
-      console.error('❌ Erro geral ao buscar consultores:', error)
-      setConsultants([])
-      toast.error('Erro ao carregar consultores')
-    }
-  }
-  
-  const fetchConvertedLeads = async () => {
-    try {
       let leadsQuery = supabase
         .from('leads')
         .select(`
-          id,
-          full_name,
-          phone,
-          indicated_by,
+          *,
           users!leads_indicated_by_fkey (
             full_name,
             email
           )
         `)
-        .eq('clinic_id', clinicId)
-        .eq('status', 'converted')
+        .eq('clinic_id', userClinic.clinic_id)
         .order('created_at', { ascending: false })
-        .limit(50)
 
-      // CORREÇÃO: Para managers, filtrar apenas leads da equipe
-      if (profile?.role === 'manager') {
-        const { data: hierarchyData } = await supabase
+      // Filtrar por role
+      if (profile?.role === 'consultant') {
+        // Consultor vê apenas seus próprios leads
+        leadsQuery = leadsQuery.eq('indicated_by', profile.id)
+      } else if (profile?.role === 'manager') {
+        // Manager vê leads de sua equipe
+        const { data: hierarchy } = await supabase
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
 
-        const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
-        consultantIds.push(profile.id) // Incluir próprios leads do manager
+        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id) // Incluir próprios leads
 
         if (consultantIds.length > 0) {
           leadsQuery = leadsQuery.in('indicated_by', consultantIds)
         }
       }
+      // clinic_admin vê todos os leads da clínica (sem filtro adicional)
 
       const { data, error } = await leadsQuery
 
       if (error) {
-        console.error('Erro ao buscar leads convertidos:', error)
-        return
+        console.error('❌ Erro ao buscar leads:', error)
+        throw error
       }
 
-      const leadsData = data?.map(lead => {
-        const users = lead.users as any[]
-        const user = Array.isArray(users) ? users[0] : users
-
-        return {
-          id: lead.id,
-          full_name: lead.full_name,
-          phone: lead.phone,
-          indicated_by: lead.indicated_by,
-          consultant_name: user?.full_name || 'Consultor não encontrado',
-          consultant_email: user?.email || ''
-        }
-      }) || []
-
-      console.log('✅ Leads convertidos encontrados:', leadsData.length)
-      setConvertedLeads(leadsData)
-    } catch (error) {
-      console.error('Erro ao buscar leads convertidos:', error)
+      console.log('✅ Leads encontrados:', data?.length || 0)
+      setLeads(data || [])
+    } catch (error: any) {
+      console.error('❌ Erro geral ao buscar leads:', error)
+      toast.error('Erro ao carregar leads')
+    } finally {
+      setLoading(false)
     }
   }
 
-  const fetchEstablishments = async () => {
+  const fetchConsultants = async () => {
     try {
-      const { data, error } = await supabase
-        .from('establishment_commissions')
-        .select('establishment_code, consultant_value_per_arcada')
-
-      if (error) {
-        console.error('Erro ao buscar estabelecimentos:', error)
-        return
-      }
-
-      setEstablishments(data || [])
-    } catch (error) {
-      console.error('Erro ao buscar estabelecimentos:', error)
-    }
-  }
-
-  const updateCommissionPreview = () => {
-    if (!indicatedById || !selectedEstablishment) {
-      setCommissionPreview(null)
-      return
-    }
-
-    const establishment = establishments.find(e => e.establishment_code === selectedEstablishment)
-    if (!establishment) return
-
-    const baseValue = establishment.consultant_value_per_arcada
-    const percentage = commissionPercentage || 100
-    const finalValue = (baseValue * percentage) / 100
-
-    setCommissionPreview({
-      baseValue,
-      percentage,
-      finalValue
-    })
-  }
-
-  // Submit para formulário básico (consultant)
-  const onBasicSubmit = async (data: BasicLeadFormData) => {
-    if (!profile || !clinicId) {
-      toast.error('Dados do usuário ou clínica não encontrados')
-      return
-    }
-
-    try {
-      setIsSubmitting(true)
-
-      // Buscar establishment_code do usuário
-      const { data: userEstablishment } = await supabase
-        .from('user_establishments')
-        .select('establishment_code')
-        .eq('user_id', profile.id)
-        .eq('status', 'active')
+      const { data: userClinic } = await supabase
+        .from('user_clinics')
+        .select('clinic_id')
+        .eq('user_id', profile?.id)
         .single()
 
-      // Preparar dados do lead
-      const leadData = {
-        full_name: data.full_name,
-        phone: data.phone,
-        email: data.email || null,
-        notes: data.notes || null,
-        indicated_by: profile.id, // O próprio usuário indica
-        clinic_id: clinicId,
-        status: 'new' as const,
-        establishment_code: userEstablishment?.establishment_code || null,
-        commission_percentage: 100,
+      if (!userClinic) return
+
+      let consultantsQuery = supabase
+        .from('users')
+        .select('id, full_name')
+        .eq('role', 'consultant')
+        .eq('status', 'active')
+
+      // Para managers, buscar apenas sua equipe
+      if (profile?.role === 'manager') {
+        const { data: hierarchy } = await supabase
+          .from('hierarchies')
+          .select('consultant_id')
+          .eq('manager_id', profile.id)
+
+        const consultantIds = hierarchy?.map(h => h.consultant_id) || []
+        consultantIds.push(profile.id)
+
+        if (consultantIds.length > 0) {
+          consultantsQuery = consultantsQuery.in('id', consultantIds)
+        }
       }
 
+      const { data } = await consultantsQuery
+      setConsultants(data || [])
+    } catch (error) {
+      console.error('Erro ao buscar consultores:', error)
+    }
+  }
+
+  const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => {
+    if (newStatus === 'converted') {
+      const lead = leads.find(l => l.id === leadId)
+      if (lead) {
+        setLeadForConversion(lead)
+        setIsArcadasModalOpen(true)
+      }
+      return
+    }
+
+    try {
       const { error } = await supabase
         .from('leads')
-        .insert(leadData)
+        .update({ 
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+          ...(newStatus === 'converted' ? { converted_at: new Date().toISOString() } : {})
+        })
+        .eq('id', leadId)
 
-      if (error) {
-        throw error
-      }
+      if (error) throw error
 
-      toast.success('Lead cadastrado com sucesso!')
-      basicForm.reset()
-      router.push('/dashboard/leads')
+      setLeads(prev => prev.map(lead =>
+        lead.id === leadId
+          ? { 
+              ...lead, 
+              status: newStatus,
+              updated_at: new Date().toISOString(),
+              ...(newStatus === 'converted' ? { converted_at: new Date().toISOString() } : {})
+            }
+          : lead
+      ))
+
+      toast.success('Status atualizado com sucesso!')
     } catch (error: any) {
-      console.error('Erro ao cadastrar lead:', error)
-      toast.error(error.message || 'Erro ao cadastrar lead')
-    } finally {
-      setIsSubmitting(false)
+      console.error('Erro ao atualizar status:', error)
+      toast.error('Erro ao atualizar status')
     }
   }
 
-  // Submit para formulário avançado (admin/manager)
-  const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
-    if (!profile || !clinicId) {
-      toast.error('Dados do usuário ou clínica não encontrados')
-      return
-    }
+  const handleArcadasConfirm = async (arcadas: number) => {
+    if (!leadForConversion) return
 
     try {
-      setIsSubmitting(true)
-
-      // Determinar quem realmente indicou
-      let actualIndicatedBy = data.indicated_by_id
-      let originalLeadId = null
-
-      if (data.indicated_by_type === 'lead') {
-        // Se foi indicado por um lead, pegar o consultor desse lead
-        const selectedLead = convertedLeads.find(lead => lead.id === data.indicated_by_id)
-        if (selectedLead) {
-          actualIndicatedBy = selectedLead.indicated_by
-          originalLeadId = selectedLead.id
-        }
-      }
-
-      // CORREÇÃO: Buscar establishment_code do consultor selecionado
-      let establishmentCode = null
-      const { data: consultantEstablishment } = await supabase
-        .from('user_establishments')
-        .select('establishment_code')
-        .eq('user_id', actualIndicatedBy)
-        .eq('status', 'active')
-        .single()
-
-      if (consultantEstablishment) {
-        establishmentCode = consultantEstablishment.establishment_code
-      }
-
-      // Preparar dados do lead
-      const leadData = {
-        full_name: data.full_name,
-        phone: data.phone,
-        email: data.email || null,
-        notes: data.notes || null,
-        indicated_by: actualIndicatedBy,
-        clinic_id: clinicId,
-        status: 'new' as const,
-        establishment_code: establishmentCode, // CORREÇÃO: Usar establishment do consultor
-        // Campos adicionais para tracking
-        original_lead_id: originalLeadId,
-        indication_type: data.indicated_by_type,
-        commission_percentage: data.commission_percentage || 100,
-      }
-
-      const { data: newLead, error } = await supabase
+      const { error } = await supabase
         .from('leads')
-        .insert(leadData)
-        .select()
-        .single()
+        .update({
+          status: 'converted',
+          arcadas_vendidas: arcadas,
+          converted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', leadForConversion.id)
 
-      if (error) {
-        throw error
-      }
+      if (error) throw error
 
-      // Se foi indicado por outro lead, criar registro de indicação
-      if (data.indicated_by_type === 'lead' && originalLeadId) {
-        await supabase
-          .from('lead_indications')
-          .insert({
-            original_lead_id: originalLeadId,
-            new_lead_id: newLead.id,
-            commission_percentage: data.commission_percentage || 50,
-            created_by: profile.id
-          })
-      }
+      // Atualizar lista local
+      setLeads(prev => prev.map(lead =>
+        lead.id === leadForConversion.id
+          ? {
+              ...lead,
+              status: 'converted' as const,
+              arcadas_vendidas: arcadas,
+              converted_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }
+          : lead
+      ))
 
-      toast.success('Lead cadastrado com sucesso!')
-      advancedForm.reset()
-      router.push('/dashboard/leads')
+      // TODO: Aqui você pode adicionar a lógica de comissão que já existe no seu sistema
+      toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
+      
+      setLeadForConversion(null)
     } catch (error: any) {
-      console.error('Erro ao cadastrar lead:', error)
-      toast.error(error.message || 'Erro ao cadastrar lead')
-    } finally {
-      setIsSubmitting(false)
+      console.error('Erro ao converter lead:', error)
+      toast.error('Erro ao converter lead')
     }
   }
 
-  const filteredConsultants = consultants.filter(consultant =>
-    consultant.full_name.toLowerCase().includes(searchConsultants.toLowerCase()) ||
-    consultant.email.toLowerCase().includes(searchConsultants.toLowerCase())
-  )
+  const handleViewLead = (lead: Lead) => {
+    setSelectedLead(lead)
+    setIsDetailModalOpen(true)
+  }
 
-  const filteredLeads = convertedLeads.filter(lead =>
-    lead.full_name.toLowerCase().includes(searchLeads.toLowerCase()) ||
-    lead.phone.includes(searchLeads) ||
-    lead.consultant_name.toLowerCase().includes(searchLeads.toLowerCase())
-  )
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'converted':
+        return <CheckCircleIcon className="h-4 w-4" />
+      case 'lost':
+        return <XCircleIcon className="h-4 w-4" />
+      case 'scheduled':
+        return <CalendarIcon className="h-4 w-4" />
+      case 'contacted':
+        return <PhoneIcon className="h-4 w-4" />
+      default:
+        return <ClockIcon className="h-4 w-4" />
+    }
+  }
 
-  // FORMULÁRIO BÁSICO (consultant)
-  if (!isAdvancedForm) {
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      'new': 'Novo',
+      'contacted': 'Contatado',
+      'scheduled': 'Agendado',
+      'converted': 'Convertido',
+      'lost': 'Perdido'
+    }
+    return labels[status] || status
+  }
+
+  const getStatusColor = (status: string) => {
+    const colors: Record<string, string> = {
+      'new': 'secondary',
+      'contacted': 'warning',
+      'scheduled': 'primary',
+      'converted': 'success',
+      'lost': 'danger'
+    }
+    return colors[status] || 'secondary'
+  }
+
+  const filteredLeads = leads.filter(lead => {
+    const matchesSearch = !searchTerm ||
+      lead.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.phone.includes(searchTerm) ||
+      (lead.email && lead.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (lead.users?.full_name.toLowerCase().includes(searchTerm.toLowerCase()))
+
+    const matchesStatus = !statusFilter || lead.status === statusFilter
+    const matchesConsultant = !consultantFilter || lead.indicated_by === consultantFilter
+    const matchesDate = !dateFilter || lead.created_at.startsWith(dateFilter)
+
+    return matchesSearch && matchesStatus && matchesConsultant && matchesDate
+  })
+
+  const stats = {
+    total: leads.length,
+    new: leads.filter(l => l.status === 'new').length,
+    contacted: leads.filter(l => l.status === 'contacted').length,
+    scheduled: leads.filter(l => l.status === 'scheduled').length,
+    converted: leads.filter(l => l.status === 'converted').length,
+    lost: leads.filter(l => l.status === 'lost').length,
+    conversionRate: leads.length > 0 ? (leads.filter(l => l.status === 'converted').length / leads.length) * 100 : 0,
+    totalArcadas: leads.filter(l => l.status === 'converted').reduce((sum, l) => sum + (l.arcadas_vendidas || 1), 0)
+  }
+
+  const canCreateLeads = profile?.role === 'clinic_admin' || profile?.role === 'manager' || profile?.role === 'consultant'
+  const canEditLeads = profile?.role === 'clinic_admin' || profile?.role === 'manager'
+
+  if (loading) {
     return (
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
-              <ArrowLeftIcon className="h-4 w-4 mr-2" />
-              Voltar
-            </Link>
-            <div>
-              <h1 className="text-2xl font-bold text-secondary-900">Novo Lead</h1>
-              <p className="text-secondary-600">
-                Cadastre uma nova indicação
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Form */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="card max-w-2xl mx-auto"
-        >
-          <form onSubmit={basicForm.handleSubmit(onBasicSubmit)} className="card-body space-y-6">
-            <div>
-              <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
-                Nome Completo *
-              </label>
-              <input
-                type="text"
-                id="full_name"
-                {...basicForm.register('full_name')}
-                className={`input ${basicForm.formState.errors.full_name ? 'input-error' : ''}`}
-                placeholder="Nome completo do lead"
-              />
-              {basicForm.formState.errors.full_name && (
-                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.full_name.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
-                Telefone *
-              </label>
-              <input
-                type="tel"
-                id="phone"
-                {...basicForm.register('phone')}
-                className={`input ${basicForm.formState.errors.phone ? 'input-error' : ''}`}
-                placeholder="(11) 99999-9999"
-              />
-              {basicForm.formState.errors.phone && (
-                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.phone.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                Email (opcional)
-              </label>
-              <input
-                type="email"
-                id="email"
-                {...basicForm.register('email')}
-                className={`input ${basicForm.formState.errors.email ? 'input-error' : ''}`}
-                placeholder="email@exemplo.com"
-              />
-              {basicForm.formState.errors.email && (
-                <p className="mt-1 text-sm text-danger-600">{basicForm.formState.errors.email.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
-                Observações (opcional)
-              </label>
-              <textarea
-                id="notes"
-                {...basicForm.register('notes')}
-                rows={3}
-                className="input"
-                placeholder="Informações adicionais sobre o lead..."
-              />
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
-              <Link href="/dashboard/leads" className="btn btn-secondary">
-                Cancelar
-              </Link>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="btn btn-primary"
-              >
-                {isSubmitting ? (
-                  <>
-                    <div className="loading-spinner w-4 h-4 mr-2"></div>
-                    Salvando...
-                  </>
-                ) : (
-                  'Cadastrar Lead'
-                )}
-              </button>
-            </div>
-          </form>
-        </motion.div>
+      <div className="flex items-center justify-center h-64">
+        <div className="loading-spinner w-8 h-8"></div>
       </div>
     )
   }
 
-  // FORMULÁRIO AVANÇADO (admin/manager)
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Link href="/dashboard/leads" className="btn btn-ghost btn-sm">
-            <ArrowLeftIcon className="h-4 w-4 mr-2" />
-            Voltar
-          </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-secondary-900">
-              Novo Lead {profile?.role === 'manager' ? '(Gerente)' : '(Admin)'}
-            </h1>
-            <p className="text-secondary-600">
-              {profile?.role === 'manager' 
-                ? 'Cadastre uma nova indicação para sua equipe'
-                : 'Cadastre uma nova indicação com controle de comissão'
-              }
-            </p>
-          </div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-secondary-900">Leads</h1>
+          <p className="text-secondary-600">
+            {profile?.role === 'consultant' 
+              ? 'Seus leads e indicações' 
+              : profile?.role === 'manager'
+              ? 'Leads da sua equipe'
+              : 'Todos os leads da clínica'
+            }
+          </p>
         </div>
+
+        {canCreateLeads && (
+          <Link href="/dashboard/leads/new" className="btn btn-primary">
+            <UserPlusIcon className="h-4 w-4 mr-2" />
+            Novo Lead
+          </Link>
+        )}
       </div>
 
-      {/* Debug Info */}
-      {process.env.NODE_ENV === 'development' && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <h4 className="text-sm font-medium text-yellow-800 mb-2">Debug Info</h4>
-          <div className="text-xs text-yellow-700 space-y-1">
-            <div>Profile ID: {profile?.id}</div>
-            <div>Profile Role: {profile?.role}</div>
-            <div>Clinic ID: {clinicId || 'Carregando...'}</div>
-            <div>Consultores: {consultants.length}</div>
-            <div>Leads convertidos: {convertedLeads.length}</div>
-            <div>Tipo selecionado: {indicatedByType}</div>
-            <div>ID selecionado: {indicatedById}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Loading enquanto busca clinicId */}
-      {!clinicId && (
-        <div className="flex items-center justify-center py-12">
-          <div className="loading-spinner w-6 h-6 mr-3"></div>
-          <span className="text-secondary-600">Carregando dados da clínica...</span>
-        </div>
-      )}
-
-      {/* Form - só renderiza quando tem clinicId */}
-      {clinicId && (
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="card max-w-4xl mx-auto"
+          className="card"
         >
-          <form onSubmit={advancedForm.handleSubmit(onAdvancedSubmit)} className="card-body space-y-8">
-            {/* Dados do Lead */}
-            <div>
-              <h3 className="text-lg font-medium text-secondary-900 mb-4">
-                Dados do Lead
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="full_name" className="block text-sm font-medium text-secondary-700 mb-2">
-                    Nome Completo *
-                  </label>
-                  <input
-                    type="text"
-                    id="full_name"
-                    {...advancedForm.register('full_name')}
-                    className={`input ${advancedForm.formState.errors.full_name ? 'input-error' : ''}`}
-                    placeholder="Nome completo do lead"
-                  />
-                  {advancedForm.formState.errors.full_name && (
-                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.full_name.message}</p>
-                  )}
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-primary-600">{stats.total}</span>
                 </div>
-
-                <div>
-                  <label htmlFor="phone" className="block text-sm font-medium text-secondary-700 mb-2">
-                    Telefone *
-                  </label>
-                  <input
-                    type="tel"
-                    id="phone"
-                    {...advancedForm.register('phone')}
-                    className={`input ${advancedForm.formState.errors.phone ? 'input-error' : ''}`}
-                    placeholder="(11) 99999-9999"
-                  />
-                  {advancedForm.formState.errors.phone && (
-                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.phone.message}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-secondary-700 mb-2">
-                    Email (opcional)
-                  </label>
-                  <input
-                    type="email"
-                    id="email"
-                    {...advancedForm.register('email')}
-                    className={`input ${advancedForm.formState.errors.email ? 'input-error' : ''}`}
-                    placeholder="email@exemplo.com"
-                  />
-                  {advancedForm.formState.errors.email && (
-                    <p className="mt-1 text-sm text-danger-600">{advancedForm.formState.errors.email.message}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="notes" className="block text-sm font-medium text-secondary-700 mb-2">
-                    Observações (opcional)
-                  </label>
-                  <textarea
-                    id="notes"
-                    {...advancedForm.register('notes')}
-                    rows={3}
-                    className="input"
-                    placeholder="Informações adicionais sobre o lead..."
-                  />
-                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Total</p>
+                <p className="text-xs text-secondary-400">Leads</p>
               </div>
             </div>
+          </div>
+        </motion.div>
 
-            {/* Quem Indicou */}
-            <div>
-              <h3 className="text-lg font-medium text-secondary-900 mb-4">
-                Quem Indicou Este Lead?
-              </h3>
-
-              {/* Tipo de Indicação */}
-              <div className="mb-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <button
-                    type="button"
-                    onClick={() => advancedForm.setValue('indicated_by_type', 'consultant')}
-                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'consultant'
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                      }`}
-                  >
-                    <UserIcon className="h-8 w-8 mx-auto mb-2 text-primary-600" />
-                    <div className="text-sm font-medium">Consultor Direto</div>
-                    <div className="text-xs text-gray-500 mt-1">100% da comissão</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => advancedForm.setValue('indicated_by_type', 'lead')}
-                    className={`p-4 border-2 rounded-lg transition-all ${indicatedByType === 'lead'
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                      }`}
-                  >
-                    <CurrencyDollarIcon className="h-8 w-8 mx-auto mb-2 text-success-600" />
-                    <div className="text-sm font-medium">Lead Convertido</div>
-                    <div className="text-xs text-gray-500 mt-1">% editável da comissão</div>
-                  </button>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-secondary-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-secondary-600">{stats.new}</span>
                 </div>
               </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Novos</p>
+                <p className="text-xs text-secondary-400">Leads</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
 
-              {/* Seleção de Consultor */}
-              {indicatedByType === 'consultant' && (
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Selecionar Consultor *
-                  </label>
-                  <div className="relative mb-4">
-                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Buscar consultor por nome ou email..."
-                      className="input pl-10"
-                      value={searchConsultants}
-                      onChange={(e) => setSearchConsultants(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
-                    {filteredConsultants.map((consultant) => (
-                      <div
-                        key={consultant.id}
-                        onClick={() => advancedForm.setValue('indicated_by_id', consultant.id)}
-                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === consultant.id ? 'bg-primary-50 border-primary-200' : ''
-                          }`}
-                      >
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="font-medium text-gray-900">{consultant.full_name}</div>
-                            <div className="text-sm text-gray-500">{consultant.email}</div>
-                            <div className="text-xs text-primary-600">{consultant.establishment_name}</div>
-                          </div>
-                          {indicatedById === consultant.id && (
-                            <div className="w-6 h-6 bg-primary-600 rounded-full flex items-center justify-center">
-                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {filteredConsultants.length === 0 && (
-                      <div className="p-4 text-center text-gray-500">
-                        {consultants.length === 0 ? (
-                          profile?.role === 'manager' 
-                            ? 'Nenhum consultor em sua equipe'
-                            : 'Nenhum consultor encontrado'
-                        ) : (
-                          'Nenhum consultor encontrado com esse termo'
-                        )}
-                      </div>
-                    )}
-                  </div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-warning-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-warning-600">{stats.contacted + stats.scheduled}</span>
                 </div>
-              )}
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Em Processo</p>
+                <p className="text-xs text-secondary-400">Leads</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
 
-              {/* Seleção de Lead */}
-              {indicatedByType === 'lead' && (
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Selecionar Lead Convertido *
-                  </label>
-                  <div className="relative mb-4">
-                    <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Buscar lead por nome, telefone ou consultor..."
-                      className="input pl-10"
-                      value={searchLeads}
-                      onChange={(e) => setSearchLeads(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
-                    {filteredLeads.map((lead) => (
-                      <div
-                        key={lead.id}
-                        onClick={() => advancedForm.setValue('indicated_by_id', lead.id)}
-                        className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${indicatedById === lead.id ? 'bg-success-50 border-success-200' : ''
-                          }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium text-gray-900">{lead.full_name}</div>
-                            <div className="text-sm text-gray-500">{lead.phone}</div>
-                            <div className="text-xs text-success-600">
-                              Convertido por: {lead.consultant_name}
-                            </div>
-                          </div>
-                          {indicatedById === lead.id && (
-                            <div className="w-6 h-6 bg-success-600 rounded-full flex items-center justify-center">
-                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {filteredLeads.length === 0 && (
-                      <div className="p-4 text-center text-gray-500">
-                        Nenhum lead convertido encontrado
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Percentual de Comissão */}
-                  {indicatedById && (
-                    <div className="mt-4">
-                      <label className="block text-sm font-medium text-secondary-700 mb-2">
-                        Percentual da Comissão (%)
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="1"
-                        {...advancedForm.register('commission_percentage', { valueAsNumber: true })}
-                        className="input w-32"
-                        placeholder="50"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Percentual da comissão que será paga ao consultor
-                      </p>
-                    </div>
-                  )}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <span className="text-sm font-bold text-success-600">{stats.converted}</span>
                 </div>
-              )}
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Convertidos</p>
+                <p className="text-xs text-secondary-400">Leads</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
 
-              {advancedForm.formState.errors.indicated_by_id && (
-                <p className="mt-2 text-sm text-danger-600">{advancedForm.formState.errors.indicated_by_id.message}</p>
-              )}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
+                  <ArrowTrendingUpIcon className="w-4 h-4 text-primary-600" />
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Taxa Conversão</p>
+                <p className="text-xs font-bold text-primary-600">{stats.conversionRate.toFixed(1)}%</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="card"
+        >
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 bg-success-100 rounded-lg flex items-center justify-center">
+                  <TrophyIcon className="w-4 h-4 text-success-600" />
+                </div>
+              </div>
+              <div className="ml-3">
+                <p className="text-xs font-medium text-secondary-500">Arcadas</p>
+                <p className="text-xs font-bold text-success-600">{stats.totalArcadas}</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Filters */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.6 }}
+        className="card"
+      >
+        <div className="card-body">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="relative">
+              <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-secondary-400" />
+              <input
+                type="text"
+                placeholder="Buscar por nome, telefone ou email..."
+                className="input pl-10"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
             </div>
 
-            {/* Preview da Comissão */}
-            {commissionPreview && (
-              <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-                <h4 className="text-sm font-medium text-primary-900 mb-3">Preview da Comissão</h4>
-                <div className="grid grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <div className="text-gray-600">Valor Base</div>
-                    <div className="font-medium">R$ {commissionPreview.baseValue.toFixed(2)}</div>
-                  </div>
-                  <div>
-                    <div className="text-gray-600">Percentual</div>
-                    <div className="font-medium">{commissionPreview.percentage}%</div>
-                  </div>
-                  <div>
-                    <div className="text-gray-600">Valor Final</div>
-                    <div className="font-bold text-primary-700">R$ {commissionPreview.finalValue.toFixed(2)}</div>
-                  </div>
-                </div>
-              </div>
+            <select
+              className="input"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">Todos os status</option>
+              <option value="new">Novo</option>
+              <option value="contacted">Contatado</option>
+              <option value="scheduled">Agendado</option>
+              <option value="converted">Convertido</option>
+              <option value="lost">Perdido</option>
+            </select>
+
+            {(profile?.role === 'clinic_admin' || profile?.role === 'manager') && (
+              <select
+                className="input"
+                value={consultantFilter}
+                onChange={(e) => setConsultantFilter(e.target.value)}
+              >
+                <option value="">Todos os consultores</option>
+                {consultants.map(consultant => (
+                  <option key={consultant.id} value={consultant.id}>
+                    {consultant.full_name}
+                  </option>
+                ))}
+              </select>
             )}
 
-            {/* Actions */}
-            <div className="flex justify-end space-x-4 pt-6 border-t border-secondary-200">
-              <Link href="/dashboard/leads" className="btn btn-secondary">
-                Cancelar
-              </Link>
-              <button
-                type="submit"
-                disabled={isSubmitting || !indicatedById}
-                className="btn btn-primary"
-              >
-                {isSubmitting ? (
-                  <>
-                    <div className="loading-spinner w-4 h-4 mr-2"></div>
-                    Salvando...
-                  </>
-                ) : (
-                  'Cadastrar Lead'
+            <input
+              type="date"
+              className="input"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+            />
+
+            <button
+              onClick={() => {
+                setSearchTerm('')
+                setStatusFilter('')
+                setConsultantFilter('')
+                setDateFilter('')
+              }}
+              className="btn btn-secondary"
+            >
+              <FunnelIcon className="h-4 w-4 mr-2" />
+              Limpar Filtros
+            </button>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Leads Table */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.7 }}
+        className="card"
+      >
+        <div className="card-body p-0">
+          <div className="overflow-x-auto">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Lead</th>
+                  <th>Contato</th>
+                  <th>Consultor</th>
+                  <th>Status</th>
+                  <th>Data</th>
+                  {stats.converted > 0 && <th>Arcadas</th>}
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLeads.map((lead) => (
+                  <tr key={lead.id} className="hover:bg-secondary-50">
+                    <td>
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0 h-10 w-10">
+                          <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center">
+                            <span className="text-sm font-medium text-white">
+                              {lead.full_name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-sm font-medium text-secondary-900">
+                            {lead.full_name}
+                          </div>
+                          {lead.notes && (
+                            <div className="text-xs text-secondary-500 max-w-xs truncate">
+                              {lead.notes}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="space-y-1">
+                        <div className="flex items-center text-sm">
+                          <PhoneIcon className="h-3 w-3 text-secondary-400 mr-1" />
+                          {lead.phone}
+                        </div>
+                        {lead.email && (
+                          <div className="flex items-center text-sm">
+                            <EnvelopeIcon className="h-3 w-3 text-secondary-400 mr-1" />
+                            {lead.email}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div>
+                        <div className="text-sm font-medium text-secondary-900">
+                          {lead.users?.full_name || 'N/A'}
+                        </div>
+                        <div className="text-xs text-secondary-500">
+                          {lead.users?.email}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      {canEditLeads || lead.indicated_by === profile?.id ? (
+                        <select
+                          value={lead.status}
+                          onChange={(e) => handleStatusChange(lead.id, e.target.value as Lead['status'])}
+                          className={`badge cursor-pointer hover:opacity-80 border-0 text-xs badge-${getStatusColor(lead.status)}`}
+                        >
+                          <option value="new">Novo</option>
+                          <option value="contacted">Contatado</option>
+                          <option value="scheduled">Agendado</option>
+                          <option value="converted">Convertido</option>
+                          <option value="lost">Perdido</option>
+                        </select>
+                      ) : (
+                        <span className={`badge badge-${getStatusColor(lead.status)} flex items-center`}>
+                          {getStatusIcon(lead.status)}
+                          <span className="ml-1">{getStatusLabel(lead.status)}</span>
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="text-sm text-secondary-900">
+                        {new Date(lead.created_at).toLocaleDateString('pt-BR')}
+                      </div>
+                      <div className="text-xs text-secondary-500">
+                        {new Date(lead.created_at).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </div>
+                      {lead.converted_at && (
+                        <div className="text-xs text-success-600">
+                          Convertido: {new Date(lead.converted_at).toLocaleDateString('pt-BR')}
+                        </div>
+                      )}
+                    </td>
+                    {stats.converted > 0 && (
+                      <td>
+                        {lead.status === 'converted' ? (
+                          <div className="flex items-center">
+                            <TrophyIcon className="h-4 w-4 text-warning-500 mr-1" />
+                            <span className="font-medium text-primary-600">
+                              {lead.arcadas_vendidas || 1}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-secondary-400">-</span>
+                        )}
+                      </td>
+                    )}
+                    <td>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => handleViewLead(lead)}
+                          className="btn btn-ghost btn-sm"
+                          title="Ver detalhes"
+                        >
+                          <EyeIcon className="h-4 w-4" />
+                        </button>
+                        {(canEditLeads || lead.indicated_by === profile?.id) && (
+                          <Link
+                            href={`/dashboard/leads/${lead.id}/edit`}
+                            className="btn btn-ghost btn-sm"
+                            title="Editar"
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </Link>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {filteredLeads.length === 0 && (
+              <div className="text-center py-12">
+                <UserIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
+                <h3 className="text-sm font-medium text-secondary-900 mb-1">
+                  {leads.length === 0 ? 'Nenhum lead encontrado' : 'Nenhum resultado encontrado'}
+                </h3>
+                <p className="text-sm text-secondary-500">
+                  {leads.length === 0
+                    ? 'Comece criando seu primeiro lead.'
+                    : 'Tente ajustar os filtros ou termo de busca.'
+                  }
+                </p>
+                {leads.length === 0 && canCreateLeads && (
+                  <Link href="/dashboard/leads/new" className="btn btn-primary mt-4">
+                    <UserPlusIcon className="h-4 w-4 mr-2" />
+                    Criar Primeiro Lead
+                  </Link>
                 )}
-              </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Performance Summary para admins/managers */}
+      {(profile?.role === 'clinic_admin' || profile?.role === 'manager') && leads.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.8 }}
+          className="card"
+        >
+          <div className="card-body">
+            <h3 className="text-lg font-medium text-secondary-900 mb-4">
+              Resumo de Performance
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="text-center">
+                <div className="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <ChartBarIcon className="h-6 w-6 text-primary-600" />
+                </div>
+                <h4 className="font-medium text-secondary-900 mb-2">Taxa de Conversão</h4>
+                <p className="text-2xl font-bold text-primary-600">{stats.conversionRate.toFixed(1)}%</p>
+                <p className="text-sm text-secondary-600">
+                  {stats.converted} de {stats.total} leads convertidos
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="w-12 h-12 bg-success-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <TrophyIcon className="h-6 w-6 text-success-600" />
+                </div>
+                <h4 className="font-medium text-secondary-900 mb-2">Arcadas Vendidas</h4>
+                <p className="text-2xl font-bold text-success-600">{stats.totalArcadas}</p>
+                <p className="text-sm text-secondary-600">
+                  Total de arcadas convertidas
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="w-12 h-12 bg-warning-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <CurrencyDollarIcon className="h-6 w-6 text-warning-600" />
+                </div>
+                <h4 className="font-medium text-secondary-900 mb-2">Receita Estimada</h4>
+                <p className="text-2xl font-bold text-warning-600">
+                  R$ {(stats.totalArcadas * 750).toLocaleString('pt-BR')}
+                </p>
+                <p className="text-sm text-secondary-600">
+                  Baseado em R$ 750 por arcada
+                </p>
+              </div>
             </div>
-          </form>
+          </div>
         </motion.div>
       )}
+
+      {/* Lead Detail Modal */}
+      <LeadDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false)
+          setSelectedLead(null)
+        }}
+        leadId={selectedLead?.id || null}
+        onLeadUpdate={fetchLeads}
+      />
+
+      {/* Arcadas Modal */}
+      <ArcadasModal
+        isOpen={isArcadasModalOpen}
+        onClose={() => {
+          setIsArcadasModalOpen(false)
+          setLeadForConversion(null)
+        }}
+        onConfirm={handleArcadasConfirm}
+        leadName={leadForConversion?.full_name || ''}
+        establishmentCode={leadForConversion?.establishment_code}
+        consultantId={leadForConversion?.indicated_by}
+      />
     </div>
   )
 }
-//
