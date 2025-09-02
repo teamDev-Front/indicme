@@ -1,4 +1,4 @@
-// src/app/dashboard/leads/new/page.tsx - CORRIGIDO
+// src/app/dashboard/leads/new/page.tsx - FUNÇÃO fetchConsultants CORRIGIDA
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -74,6 +74,7 @@ export default function NewLeadPage() {
   const supabase = createClient()
 
   // Determinar qual formulário mostrar
+  // Manager também deve ter acesso ao formulário avançado
   const isAdvancedForm = profile?.role === 'clinic_admin' || profile?.role === 'manager'
 
   // Formulário básico (consultant)
@@ -123,6 +124,8 @@ export default function NewLeadPage() {
 
   const fetchClinicId = async () => {
     try {
+      console.log('🔍 Buscando clinic_id para o usuário:', profile?.id)
+
       const { data: userClinic, error } = await supabase
         .from('user_clinics')
         .select('clinic_id')
@@ -130,14 +133,15 @@ export default function NewLeadPage() {
         .single()
 
       if (error || !userClinic) {
-        console.error('Erro ao buscar clínica:', error)
+        console.error('❌ Erro ao buscar clínica:', error)
         toast.error('Erro: Usuário não está associado a uma clínica')
         return
       }
 
+      console.log('✅ Clinic ID encontrado:', userClinic.clinic_id)
       setClinicId(userClinic.clinic_id)
     } catch (error) {
-      console.error('Erro ao buscar clinic_id:', error)
+      console.error('❌ Erro ao buscar clinic_id:', error)
       toast.error('Erro ao carregar dados da clínica')
     }
   }
@@ -157,8 +161,11 @@ export default function NewLeadPage() {
     }
   }
 
+  // CORREÇÃO PRINCIPAL: Função fetchConsultants corrigida para managers
   const fetchConsultants = async () => {
     try {
+      console.log('🔍 Buscando consultores para role:', profile?.role)
+
       let consultantsQuery = supabase
         .from('users')
         .select(`
@@ -172,15 +179,18 @@ export default function NewLeadPage() {
         .eq('status', 'active')
         .order('full_name')
 
-      // Para managers, filtrar apenas sua equipe
+      // CORREÇÃO: Para managers, filtrar apenas sua equipe
       if (profile?.role === 'manager') {
+        console.log('👑 Usuário é manager, buscando apenas sua equipe...')
+        
+        // Buscar consultores da equipe do manager
         const { data: hierarchyData, error: hierarchyError } = await supabase
           .from('hierarchies')
           .select('consultant_id')
           .eq('manager_id', profile.id)
 
         if (hierarchyError) {
-          console.error('Erro ao buscar hierarquia:', hierarchyError)
+          console.error('❌ Erro ao buscar hierarquia:', hierarchyError)
           toast.error('Erro ao buscar sua equipe')
           setConsultants([])
           return
@@ -189,23 +199,30 @@ export default function NewLeadPage() {
         const consultantIds = hierarchyData?.map(h => h.consultant_id) || []
         
         if (consultantIds.length === 0) {
+          console.log('⚠️ Manager não possui equipe')
           toast.error('Você não possui consultores em sua equipe')
           setConsultants([])
           return
         }
 
+        console.log('✅ Consultores da equipe encontrados:', consultantIds.length)
+
+        // Filtrar apenas os consultores da equipe
         consultantsQuery = consultantsQuery.in('id', consultantIds)
       }
 
       const { data, error } = await consultantsQuery
 
       if (error) {
-        console.error('Erro ao buscar consultores:', error)
+        console.error('❌ Erro ao buscar consultores:', error)
         setConsultants([])
         return
       }
 
+      console.log('✅ Consultores encontrados:', data?.length || 0)
+
       if (!data || data.length === 0) {
+        console.log('⚠️ Nenhum consultor encontrado')
         const message = profile?.role === 'manager' 
           ? 'Nenhum consultor encontrado em sua equipe'
           : 'Nenhum consultor encontrado'
@@ -218,6 +235,7 @@ export default function NewLeadPage() {
       const consultantsWithEstablishments = await Promise.all(
         data.map(async (consultant) => {
           try {
+            // Buscar estabelecimento do consultor
             const { data: userEstablishment } = await supabase
               .from('user_establishments')
               .select(`
@@ -257,10 +275,11 @@ export default function NewLeadPage() {
         })
       )
 
+      console.log('✅ Consultores com estabelecimentos processados:', consultantsWithEstablishments.length)
       setConsultants(consultantsWithEstablishments)
 
     } catch (error) {
-      console.error('Erro geral ao buscar consultores:', error)
+      console.error('❌ Erro geral ao buscar consultores:', error)
       setConsultants([])
       toast.error('Erro ao carregar consultores')
     }
@@ -285,7 +304,7 @@ export default function NewLeadPage() {
         .order('created_at', { ascending: false })
         .limit(50)
 
-      // Para managers, filtrar apenas leads da equipe
+      // CORREÇÃO: Para managers, filtrar apenas leads da equipe
       if (profile?.role === 'manager') {
         const { data: hierarchyData } = await supabase
           .from('hierarchies')
@@ -321,6 +340,7 @@ export default function NewLeadPage() {
         }
       }) || []
 
+      console.log('✅ Leads convertidos encontrados:', leadsData.length)
       setConvertedLeads(leadsData)
     } catch (error) {
       console.error('Erro ao buscar leads convertidos:', error)
@@ -364,7 +384,7 @@ export default function NewLeadPage() {
     })
   }
 
-  // Submit para formulário básico (consultant) - CORRIGIDO
+  // Submit para formulário básico (consultant)
   const onBasicSubmit = async (data: BasicLeadFormData) => {
     if (!profile || !clinicId) {
       toast.error('Dados do usuário ou clínica não encontrados')
@@ -382,7 +402,7 @@ export default function NewLeadPage() {
         .eq('status', 'active')
         .single()
 
-      // Preparar dados do lead - REMOVIDOS campos desnecessários
+      // Preparar dados do lead
       const leadData = {
         full_name: data.full_name,
         phone: data.phone,
@@ -392,6 +412,7 @@ export default function NewLeadPage() {
         clinic_id: clinicId,
         status: 'new' as const,
         establishment_code: userEstablishment?.establishment_code || null,
+        commission_percentage: 100,
       }
 
       const { error } = await supabase
@@ -413,7 +434,7 @@ export default function NewLeadPage() {
     }
   }
 
-  // Submit para formulário avançado (admin/manager) - CORRIGIDO
+  // Submit para formulário avançado (admin/manager)
   const onAdvancedSubmit = async (data: AdvancedLeadFormData) => {
     if (!profile || !clinicId) {
       toast.error('Dados do usuário ou clínica não encontrados')
@@ -436,7 +457,7 @@ export default function NewLeadPage() {
         }
       }
 
-      // Buscar establishment_code do consultor selecionado
+      // CORREÇÃO: Buscar establishment_code do consultor selecionado
       let establishmentCode = null
       const { data: consultantEstablishment } = await supabase
         .from('user_establishments')
@@ -449,7 +470,7 @@ export default function NewLeadPage() {
         establishmentCode = consultantEstablishment.establishment_code
       }
 
-      // Preparar dados do lead - REMOVIDOS campos problemáticos
+      // Preparar dados do lead
       const leadData = {
         full_name: data.full_name,
         phone: data.phone,
@@ -458,7 +479,11 @@ export default function NewLeadPage() {
         indicated_by: actualIndicatedBy,
         clinic_id: clinicId,
         status: 'new' as const,
-        establishment_code: establishmentCode,
+        establishment_code: establishmentCode, // CORREÇÃO: Usar establishment do consultor
+        // Campos adicionais para tracking
+        original_lead_id: originalLeadId,
+        indication_type: data.indicated_by_type,
+        commission_percentage: data.commission_percentage || 100,
       }
 
       const { data: newLead, error } = await supabase
@@ -471,21 +496,16 @@ export default function NewLeadPage() {
         throw error
       }
 
-      // Se foi indicado por outro lead, criar registro de indicação (se a tabela existir)
+      // Se foi indicado por outro lead, criar registro de indicação
       if (data.indicated_by_type === 'lead' && originalLeadId) {
-        try {
-          await supabase
-            .from('lead_indications')
-            .insert({
-              original_lead_id: originalLeadId,
-              new_lead_id: newLead.id,
-              commission_percentage: data.commission_percentage || 50,
-              created_by: profile.id
-            })
-        } catch (error) {
-          // Se a tabela não existir, apenas loggar o erro mas não falhar
-          console.warn('Tabela lead_indications não existe ou erro ao inserir:', error)
-        }
+        await supabase
+          .from('lead_indications')
+          .insert({
+            original_lead_id: originalLeadId,
+            new_lead_id: newLead.id,
+            commission_percentage: data.commission_percentage || 50,
+            created_by: profile.id
+          })
       }
 
       toast.success('Lead cadastrado com sucesso!')
@@ -625,7 +645,7 @@ export default function NewLeadPage() {
     )
   }
 
-  // FORMULÁRIO AVANÇADO (admin/manager) - resto igual...
+  // FORMULÁRIO AVANÇADO (admin/manager)
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -648,6 +668,22 @@ export default function NewLeadPage() {
           </div>
         </div>
       </div>
+
+      {/* Debug Info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-yellow-800 mb-2">Debug Info</h4>
+          <div className="text-xs text-yellow-700 space-y-1">
+            <div>Profile ID: {profile?.id}</div>
+            <div>Profile Role: {profile?.role}</div>
+            <div>Clinic ID: {clinicId || 'Carregando...'}</div>
+            <div>Consultores: {consultants.length}</div>
+            <div>Leads convertidos: {convertedLeads.length}</div>
+            <div>Tipo selecionado: {indicatedByType}</div>
+            <div>ID selecionado: {indicatedById}</div>
+          </div>
+        </div>
+      )}
 
       {/* Loading enquanto busca clinicId */}
       {!clinicId && (
@@ -953,3 +989,4 @@ export default function NewLeadPage() {
     </div>
   )
 }
+//
