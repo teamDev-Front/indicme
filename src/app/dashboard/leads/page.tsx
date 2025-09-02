@@ -199,11 +199,11 @@ export default function LeadsPage() {
       setConsultants(consultantsData?.map(c => ({ id: c.id, name: c.full_name })) || [])
 
       // Buscar estabelecimentos únicos
-      const uniqueEstablishments = [...new Set(
-        leads
-          .map(lead => lead.establishment_code)
-          .filter(Boolean)
-      )] as string[]
+      const establishmentCodes = leads
+        .map(lead => lead.establishment_code)
+        .filter((code): code is string => code !== null && code !== undefined)
+      
+      const uniqueEstablishments = Array.from(new Set(establishmentCodes))
 
       setEstablishments(uniqueEstablishments)
     } catch (error) {
