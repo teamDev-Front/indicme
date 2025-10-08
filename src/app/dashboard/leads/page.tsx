@@ -894,7 +894,7 @@ export default function LeadsListingPage() {
 
                     <p className="text-sm text-secondary-600 text-center mb-4">
                       Tem certeza que deseja excluir o lead{' '}
-                      <strong className="text-secondary-900">"{leadToDelete?.full_name}"</strong>?
+                      <strong className="text-secondary-900">&quot;{leadToDelete?.full_name}&quot;</strong>?
                     </p>
 
                     <div className="bg-danger-50 border border-danger-200 rounded-lg p-3 mb-6">

@@ -545,7 +545,7 @@ export default function LeadDetailModal({
                     </Dialog.Title>
 
                     <p className="text-sm text-secondary-600 text-center mb-6">
-                      Tem certeza que deseja excluir o lead <strong>"{lead?.full_name}"</strong>?
+                      Tem certeza que deseja excluir o lead <strong>&quot;{lead?.full_name}&quot;</strong>?
                       <br /><br />
                       Esta ação é <strong className="text-danger-600">irreversível</strong> e irá:
                     </p>
