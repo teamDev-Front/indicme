@@ -1,4 +1,4 @@
-// src/app/dashboard/settings/page.tsx
+// src/app/dashboard/settings/page.tsx - VERSÃO CORRIGIDA
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -6,415 +6,227 @@ import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import { motion } from 'framer-motion'
 import {
-  CogIcon,
   CurrencyDollarIcon,
-  CalculatorIcon,
-  ChartBarIcon,
+  BuildingOfficeIcon,
+  Cog6ToothIcon,
+  BellIcon,
   InformationCircleIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
-  BuildingOfficeIcon,
-  UserGroupIcon,
-  BellIcon,
-  ShieldCheckIcon,
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 
-interface CommissionSettings {
-  id?: string
-  clinic_id: string
-  valor_por_arcada: number // Mudança: valor fixo por arcada
-  bonus_a_cada_arcadas: number // A cada quantas arcadas ganha bônus
-  valor_bonus: number // Valor do bônus
-  created_at?: string
-  updated_at?: string
+interface EstablishmentCommission {
+  id: string
+  establishment_code: string
+  consultant_value_per_arcada: number
+  consultant_bonus_every_arcadas: number
+  consultant_bonus_value: number
+  manager_value_per_arcada: number
+  manager_bonus_35_arcadas: number
+  manager_bonus_50_arcadas: number
+  manager_bonus_75_arcadas: number
+  consultant_active: boolean // 🔥 CORRIGIDO: Nome correto da coluna
+  manager_bonus_active: boolean
+  establishment_codes?: {
+    name: string
+    code: string
+  }
 }
 
-interface ClinicSettings {
-  id?: string
-  name: string
-  cnpj: string | null
-  email: string | null
-  phone: string | null
-  address: string | null
-  city: string | null
-  state: string | null
-  zip_code: string | null
+interface CommissionSettings {
+  consultantValuePerArcada: number
+  consultantBonusEveryArcadas: number
+  consultantBonusValue: number
+  managerValuePerArcada: number
+  managerBonus35: number
+  managerBonus50: number
+  managerBonus75: number
+  consultantBonusActive: boolean // 🔥 CORRIGIDO
+  managerBonusActive: boolean
 }
 
 export default function SettingsPage() {
   const { profile } = useAuth()
   const [activeTab, setActiveTab] = useState('commissions')
-  const [commissionSettings, setCommissionSettings] = useState<CommissionSettings>({
-    clinic_id: '',
-    valor_por_arcada: 750.00,
-    bonus_a_cada_arcadas: 7,
-    valor_bonus: 750.00,
-  })
-  const [clinicSettings, setClinicSettings] = useState<ClinicSettings>({
-    name: '',
-    cnpj: null,
-    email: null,
-    phone: null,
-    address: null,
-    city: null,
-    state: null,
-    zip_code: null,
-  })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [hasChanges, setHasChanges] = useState(false)
-  const [previewArcadas, setPreviewArcadas] = useState(10)
+  const [establishments, setEstablishments] = useState<EstablishmentCommission[]>([])
+  const [selectedEstablishment, setSelectedEstablishment] = useState<string>('')
+  const [settings, setSettings] = useState<CommissionSettings>({
+    consultantValuePerArcada: 750,
+    consultantBonusEveryArcadas: 7,
+    consultantBonusValue: 750,
+    managerValuePerArcada: 75,
+    managerBonus35: 5000,
+    managerBonus50: 10000,
+    managerBonus75: 15000,
+    consultantBonusActive: true, // 🔥 CORRIGIDO
+    managerBonusActive: true,
+  })
+
   const supabase = createClient()
+
+  const tabs = [
+    { id: 'commissions', name: 'Comissões', icon: CurrencyDollarIcon },
+    { id: 'establishments', name: 'Estabelecimentos', icon: BuildingOfficeIcon },
+    { id: 'general', name: 'Geral', icon: Cog6ToothIcon },
+    { id: 'notifications', name: 'Notificações', icon: BellIcon },
+  ]
 
   useEffect(() => {
     if (profile?.role === 'clinic_admin') {
-      fetchSettings()
+      fetchEstablishments()
+    } else {
+      setLoading(false)
     }
   }, [profile])
 
-  useEffect(() => {
-    // Só marcar como alterado se realmente houve mudança nos valores
-    const hasActualChanges =
-      commissionSettings.valor_por_arcada !== 750 ||
-      commissionSettings.bonus_a_cada_arcadas !== 7 ||
-      commissionSettings.valor_bonus !== 750
-
-    setHasChanges(hasActualChanges)
-  }, [
-    commissionSettings.valor_por_arcada,
-    commissionSettings.bonus_a_cada_arcadas,
-    commissionSettings.valor_bonus
-  ])
-
-  // E corrigir a função calculatePreview para ser mais robusta:
-  const calculatePreview = () => {
-    const arcadasVendidas = previewArcadas || 0
-    const valorPorArcada = commissionSettings.valor_por_arcada || 750
-    const bonusACada = commissionSettings.bonus_a_cada_arcadas || 7
-    const valorBonus = commissionSettings.valor_bonus || 750
-
-    // Calcular valor base (arcadas × valor)
-    const valorBase = arcadasVendidas * valorPorArcada
-
-    // Calcular quantos bônus ganhou
-    const quantidadeBonus = bonusACada > 0 ? Math.floor(arcadasVendidas / bonusACada) : 0
-    const valorTotalBonus = quantidadeBonus * valorBonus
-
-    // Próximo bônus
-    const arcadasParaProximoBonus = bonusACada > 0 ? bonusACada - (arcadasVendidas % bonusACada) : 0
-    const proximoBonus = arcadasParaProximoBonus === bonusACada ? 0 : arcadasParaProximoBonus
-
-    return {
-      arcadasVendidas,
-      valorPorArcada,
-      valorBase,
-      quantidadeBonus,
-      valorTotalBonus,
-      valorTotal: valorBase + valorTotalBonus,
-      proximoBonus,
-      proximoBonusEm: proximoBonus > 0 ? arcadasVendidas + proximoBonus : (arcadasVendidas + bonusACada)
-    }
-  }
-
-  // settings/page.tsx - Função fetchSettings corrigida
-  const fetchSettings = async () => {
+  const fetchEstablishments = async () => {
     try {
       setLoading(true)
 
-      // Para clinic_admin, buscar clínica de forma mais robusta
-      let clinicId: string | null = null
+      const { data, error } = await supabase
+        .from('establishment_commissions')
+        .select(`
+          *,
+          establishment_codes (
+            name,
+            code
+          )
+        `)
+        .order('establishment_code')
 
-      if (profile?.role === 'clinic_admin') {
-        // Primeira tentativa: buscar via user_clinics
-        const { data: userClinic, error: userClinicError } = await supabase
-          .from('user_clinics')
-          .select('clinic_id')
-          .eq('user_id', profile.id)
-          .maybeSingle()
+      if (error) throw error
 
-        if (userClinic && userClinic.clinic_id) {
-          clinicId = userClinic.clinic_id
-          console.log('✅ Clínica encontrada via user_clinics:', clinicId)
-        } else {
-          console.log('⚠️ Não encontrou via user_clinics, tentando criar associação...')
+      console.log('📊 Estabelecimentos carregados:', data)
+      setEstablishments(data || [])
 
-          // Segunda tentativa: buscar todas as clínicas e associar o admin à primeira
-          const { data: clinics, error: clinicsError } = await supabase
-            .from('clinics')
-            .select('id, name')
-            .eq('status', 'active')
-            .limit(1)
-
-          if (clinicsError) {
-            console.error('Erro ao buscar clínicas:', clinicsError)
-            throw new Error('Erro ao buscar clínicas disponíveis')
-          }
-
-          if (clinics && clinics.length > 0) {
-            clinicId = clinics[0].id
-            console.log('✅ Clínica encontrada:', clinics[0].name)
-
-            // Tentar associar o admin a esta clínica
-            const { error: associationError } = await supabase
-              .from('user_clinics')
-              .upsert({
-                user_id: profile.id,
-                clinic_id: clinicId
-              }, {
-                onConflict: 'user_id,clinic_id'
-              })
-
-            if (associationError) {
-              console.warn('Erro ao associar admin à clínica:', associationError)
-            } else {
-              console.log('✅ Admin associado à clínica automaticamente')
-            }
-          } else {
-            // Se não tem clínicas, criar uma clínica padrão para o super admin
-            console.log('⚠️ Nenhuma clínica encontrada, criando clínica padrão...')
-
-            const { data: newClinic, error: createClinicError } = await supabase
-              .from('clinics')
-              .insert({
-                name: 'Clínica Principal',
-                status: 'active'
-              })
-              .select('id')
-              .single()
-
-            if (createClinicError) {
-              console.error('Erro ao criar clínica padrão:', createClinicError)
-              throw new Error('Erro ao criar clínica padrão')
-            }
-
-            clinicId = newClinic.id
-
-            // Associar o admin à nova clínica
-            await supabase
-              .from('user_clinics')
-              .insert({
-                user_id: profile.id,
-                clinic_id: clinicId
-              })
-
-            console.log('✅ Clínica padrão criada e admin associado')
-            toast.success('Clínica principal criada automaticamente')
-          }
-        }
-      } else {
-        throw new Error('Acesso negado: apenas administradores podem acessar configurações')
+      // Selecionar primeiro estabelecimento por padrão
+      if (data && data.length > 0) {
+        setSelectedEstablishment(data[0].establishment_code)
+        loadSettingsFromEstablishment(data[0])
       }
 
-      if (!clinicId) {
-        throw new Error('Não foi possível determinar a clínica para este usuário')
-      }
-
-      // Buscar configurações de comissão
-      const { data: commissionData, error: commissionError } = await supabase
-        .from('commission_settings')
-        .select('*')
-        .eq('clinic_id', clinicId)
-        .maybeSingle()
-
-      if (commissionError && commissionError.code !== 'PGRST116') {
-        console.error('Erro ao buscar configurações de comissão:', commissionError)
-        throw commissionError
-      }
-
-      if (commissionData) {
-        setCommissionSettings({
-          ...commissionData,
-          valor_por_arcada: Number(commissionData.valor_por_arcada) || 750,
-          bonus_a_cada_arcadas: Number(commissionData.bonus_a_cada_arcadas) || 7,
-          valor_bonus: Number(commissionData.valor_bonus) || 750,
-        })
-        console.log('✅ Configurações de comissão carregadas')
-      } else {
-        // Se não existe configuração, usar valores padrão
-        setCommissionSettings(prev => ({
-          ...prev,
-          clinic_id: clinicId,
-          valor_por_arcada: 750,
-          bonus_a_cada_arcadas: 7,
-          valor_bonus: 750,
-        }))
-        console.log('✅ Usando configurações padrão')
-      }
-
-      // Buscar dados da clínica
-      const { data: clinicData, error: clinicError } = await supabase
-        .from('clinics')
-        .select('*')
-        .eq('id', clinicId)
-        .maybeSingle()
-
-      if (clinicError) {
-        console.error('Erro ao buscar dados da clínica:', clinicError)
-      } else if (clinicData) {
-        setClinicSettings(clinicData)
-        console.log('✅ Dados da clínica carregados:', clinicData.name)
-      }
-
-      setHasChanges(false)
-      console.log('✅ Todas as configurações carregadas com sucesso')
-
-    } catch (error: any) {
-      console.error('❌ Erro ao buscar configurações:', error)
-
-      // Mensagens de erro mais específicas
-      if (error.message.includes('Acesso negado')) {
-        toast.error('Acesso restrito: apenas administradores podem ver configurações')
-      } else if (error.message.includes('clínica')) {
-        toast.error('Problema com associação à clínica. Contate o suporte.')
-      } else {
-        toast.error(`Erro ao carregar configurações: ${error.message}`)
-      }
+    } catch (error) {
+      console.error('Erro ao carregar estabelecimentos:', error)
+      toast.error('Erro ao carregar configurações')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSaveCommissions = async () => {
-    try {
-      setSaving(true)
+  const loadSettingsFromEstablishment = (establishment: EstablishmentCommission) => {
+    setSettings({
+      consultantValuePerArcada: establishment.consultant_value_per_arcada,
+      consultantBonusEveryArcadas: establishment.consultant_bonus_every_arcadas,
+      consultantBonusValue: establishment.consultant_bonus_value,
+      managerValuePerArcada: establishment.manager_value_per_arcada,
+      managerBonus35: establishment.manager_bonus_35_arcadas,
+      managerBonus50: establishment.manager_bonus_50_arcadas,
+      managerBonus75: establishment.manager_bonus_75_arcadas,
+      consultantBonusActive: establishment.consultant_active ?? true, // 🔥 CORRIGIDO
+      managerBonusActive: establishment.manager_bonus_active ?? true,
+    })
+  }
 
-      // Validar valores
-      if (!commissionSettings.valor_por_arcada || commissionSettings.valor_por_arcada <= 0) {
-        toast.error('Valor por arcada deve ser maior que zero')
-        return
-      }
-
-      if (!commissionSettings.bonus_a_cada_arcadas || commissionSettings.bonus_a_cada_arcadas <= 0) {
-        toast.error('Quantidade de arcadas para bônus deve ser maior que zero')
-        return
-      }
-
-      if (!commissionSettings.valor_bonus || commissionSettings.valor_bonus <= 0) {
-        toast.error('Valor do bônus deve ser maior que zero')
-        return
-      }
-
-      if (!commissionSettings.clinic_id) {
-        toast.error('ID da clínica não encontrado')
-        return
-      }
-
-      const dataToSave = {
-        clinic_id: commissionSettings.clinic_id,
-        valor_por_arcada: Number(commissionSettings.valor_por_arcada),
-        bonus_a_cada_arcadas: Number(commissionSettings.bonus_a_cada_arcadas),
-        valor_bonus: Number(commissionSettings.valor_bonus),
-      }
-
-      if (commissionSettings.id) {
-        // Atualizar existente
-        const { error } = await supabase
-          .from('commission_settings')
-          .update({
-            ...dataToSave,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', commissionSettings.id)
-
-        if (error) throw error
-      } else {
-        // Inserir novo
-        const { data, error } = await supabase
-          .from('commission_settings')
-          .insert(dataToSave)
-          .select()
-          .single()
-
-        if (error) throw error
-
-        if (data) {
-          setCommissionSettings(prev => ({ ...prev, ...data }))
-        }
-      }
-
-      setHasChanges(false)
-      toast.success('Configurações de comissão salvas com sucesso!')
-    } catch (error: any) {
-      console.error('Erro ao salvar configurações:', error)
-      toast.error(`Erro ao salvar configurações: ${error.message}`)
-    } finally {
-      setSaving(false)
+  const handleEstablishmentChange = (code: string) => {
+    setSelectedEstablishment(code)
+    const establishment = establishments.find(e => e.establishment_code === code)
+    if (establishment) {
+      loadSettingsFromEstablishment(establishment)
     }
   }
 
-  // Também adicione esta função de validação de entrada:
-  const handleNumberInput = (value: string, field: keyof CommissionSettings) => {
-    const numValue = parseFloat(value)
-    if (!isNaN(numValue) && numValue >= 0) {
-      setCommissionSettings(prev => ({
-        ...prev,
-        [field]: numValue
-      }))
-    } else if (value === '') {
-      setCommissionSettings(prev => ({
-        ...prev,
-        [field]: 0
-      }))
+  const handleSaveSettings = async () => {
+    if (!selectedEstablishment) {
+      toast.error('Selecione um estabelecimento')
+      return
     }
-  }
 
-  const handleSaveClinic = async () => {
     try {
       setSaving(true)
+      console.log('💾 Salvando configurações para:', selectedEstablishment)
 
-      const { data: userClinic } = await supabase
-        .from('user_clinics')
-        .select('clinic_id')
-        .eq('user_id', profile?.id)
-        .single()
-
-      if (!userClinic) return
-
+      // 🔥 CORRIGIDO: Usar nomes corretos das colunas
       const { error } = await supabase
-        .from('clinics')
+        .from('establishment_commissions')
         .update({
-          name: clinicSettings.name,
-          cnpj: clinicSettings.cnpj,
-          email: clinicSettings.email,
-          phone: clinicSettings.phone,
-          address: clinicSettings.address,
-          city: clinicSettings.city,
-          state: clinicSettings.state,
-          zip_code: clinicSettings.zip_code,
-          updated_at: new Date().toISOString()
+          consultant_value_per_arcada: settings.consultantValuePerArcada,
+          consultant_bonus_every_arcadas: settings.consultantBonusEveryArcadas,
+          consultant_bonus_value: settings.consultantBonusValue,
+          manager_value_per_arcada: settings.managerValuePerArcada,
+          manager_bonus_35_arcadas: settings.managerBonus35,
+          manager_bonus_50_arcadas: settings.managerBonus50,
+          manager_bonus_75_arcadas: settings.managerBonus75,
+          consultant_active: settings.consultantBonusActive, // 🔥 CORRIGIDO
+          manager_bonus_active: settings.managerBonusActive,
+          updated_at: new Date().toISOString(),
         })
-        .eq('id', userClinic.clinic_id)
+        .eq('establishment_code', selectedEstablishment)
 
       if (error) throw error
 
-      toast.success('Dados da clínica atualizados com sucesso!')
+      toast.success('Configurações salvas com sucesso!')
+      console.log('✅ Configurações salvas')
+
+      // Recarregar dados
+      await fetchEstablishments()
+
     } catch (error: any) {
-      console.error('Erro ao salvar dados da clínica:', error)
-      toast.error('Erro ao salvar dados da clínica')
+      console.error('❌ Erro ao salvar:', error)
+      toast.error(`Erro ao salvar: ${error.message}`)
     } finally {
       setSaving(false)
     }
   }
 
-  const preview = calculatePreview()
+  // Simulador de ganhos
+  const simulateEarnings = (arcadas: number) => {
+    const consultantBase = arcadas * settings.consultantValuePerArcada
+    
+    let consultantBonus = 0
+    if (settings.consultantBonusActive) {
+      const bonusCount = Math.floor(arcadas / settings.consultantBonusEveryArcadas)
+      consultantBonus = bonusCount * settings.consultantBonusValue
+    }
 
-  const tabs = [
-    { id: 'commissions', name: 'Comissões', icon: CurrencyDollarIcon },
-    { id: 'clinic', name: 'Dados da Clínica', icon: BuildingOfficeIcon },
-    { id: 'users', name: 'Usuários', icon: UserGroupIcon },
-    { id: 'notifications', name: 'Notificações', icon: BellIcon },
-    { id: 'security', name: 'Segurança', icon: ShieldCheckIcon },
-  ]
+    const consultantTotal = consultantBase + consultantBonus
 
-  if (profile?.role !== 'clinic_admin') {
+    const managerBase = arcadas * settings.managerValuePerArcada
+    
+    let managerBonus = 0
+    if (settings.managerBonusActive) {
+      if (arcadas >= 75) managerBonus = settings.managerBonus75
+      else if (arcadas >= 50) managerBonus = settings.managerBonus50
+      else if (arcadas >= 35) managerBonus = settings.managerBonus35
+    }
+
+    const managerTotal = managerBase + managerBonus
+
+    return {
+      consultant: {
+        base: consultantBase,
+        bonus: consultantBonus,
+        total: consultantTotal,
+      },
+      manager: {
+        base: managerBase,
+        bonus: managerBonus,
+        total: managerTotal,
+      },
+      total: consultantTotal + managerTotal,
+    }
+  }
+
+  if (profile?.role !== 'clinic_admin' && profile?.role !== 'clinic_viewer') {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-warning-400 mb-4" />
           <h3 className="text-lg font-medium text-secondary-900 mb-2">Acesso Restrito</h3>
           <p className="text-secondary-500">
-            Apenas administradores da clínica podem acessar as configurações.
+            Apenas administradores podem acessar as configurações.
           </p>
         </div>
       </div>
@@ -446,10 +258,11 @@ export default function SettingsPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id
-                ? 'border-primary-500 text-primary-600'
-                : 'border-transparent text-secondary-500 hover:text-secondary-700 hover:border-secondary-300'
-                }`}
+              className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === tab.id
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-secondary-500 hover:text-secondary-700 hover:border-secondary-300'
+              }`}
             >
               <tab.icon className="h-4 w-4 mr-2" />
               {tab.name}
@@ -479,111 +292,323 @@ export default function SettingsPage() {
             </div>
           </motion.div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Settings Form */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="card"
-            >
-              <div className="card-header">
-                <h3 className="text-lg font-medium text-secondary-900 flex items-center">
-                  <CogIcon className="h-5 w-5 mr-2" />
-                  Configurações de Comissão
+          {/* Seleção de Estabelecimento */}
+          <div className="card">
+            <div className="card-body">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-secondary-900">
+                  Selecione o Estabelecimento
                 </h3>
+                <BuildingOfficeIcon className="h-5 w-5 text-primary-600" />
               </div>
-              <div className="card-body space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Valor por Arcada
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <span className="text-secondary-500 text-sm">R$</span>
+              
+              <select
+                value={selectedEstablishment}
+                onChange={(e) => handleEstablishmentChange(e.target.value)}
+                className="input"
+              >
+                <option value="">Selecione um estabelecimento</option>
+                {establishments.map((est) => (
+                  <option key={est.establishment_code} value={est.establishment_code}>
+                    {est.establishment_codes?.name || est.establishment_code}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {selectedEstablishment && (
+            <>
+              {/* Comissões do Consultor */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                className="card"
+              >
+                <div className="card-body">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <CurrencyDollarIcon className="h-5 w-5 text-primary-600 mr-2" />
+                      <h3 className="text-lg font-semibold text-secondary-900">
+                        Comissões do Consultor
+                      </h3>
                     </div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      className="input pl-10"
-                      value={commissionSettings.valor_por_arcada || ''}
-                      onChange={(e) => handleNumberInput(e.target.value, 'valor_por_arcada')}
-                      placeholder="750.00"
-                    />
                   </div>
-                  <p className="text-xs text-secondary-500 mt-1">
-                    Valor fixo pago por cada arcada vendida
-                  </p>
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Bônus a Cada X Arcadas
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    className="input"
-                    value={commissionSettings.bonus_a_cada_arcadas || ''}
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value)
-                      if (!isNaN(value) && value > 0) {
-                        setCommissionSettings(prev => ({
+                  <div className="space-y-4">
+                    {/* Valor por Arcada */}
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Valor por Arcada (R$) *
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={settings.consultantValuePerArcada}
+                        onChange={(e) => setSettings(prev => ({
                           ...prev,
-                          bonus_a_cada_arcadas: value
-                        }))
-                      } else if (e.target.value === '') {
-                        setCommissionSettings(prev => ({
-                          ...prev,
-                          bonus_a_cada_arcadas: 1
-                        }))
-                      }
-                    }}
-                    placeholder="7"
-                  />
-                  <p className="text-xs text-secondary-500 mt-1">
-                    A cada quantas arcadas o consultor ganha bônus
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Valor do Bônus
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <span className="text-secondary-500 text-sm">R$</span>
+                          consultantValuePerArcada: parseFloat(e.target.value) || 0
+                        }))}
+                        className="input"
+                        placeholder="750.00"
+                      />
+                      <p className="text-xs text-success-600 mt-1 flex items-center">
+                        <CheckCircleIcon className="h-3 w-3 mr-1" />
+                        Valor fixo pago por cada arcada vendida (sempre ativo)
+                      </p>
                     </div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      className="input pl-10"
-                      value={commissionSettings.valor_bonus || ''}
-                      onChange={(e) => handleNumberInput(e.target.value, 'valor_bonus')}
-                      placeholder="750.00"
-                    />
+
+                    {/* Bônus Progressivos */}
+                    <div className="bg-primary-50 rounded-lg p-4 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-secondary-900">
+                          Bônus Progressivos
+                        </label>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-secondary-600">
+                            Bônus: {settings.consultantBonusActive ? 'Ativo' : 'Inativo'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setSettings(prev => ({
+                              ...prev,
+                              consultantBonusActive: !prev.consultantBonusActive
+                            }))}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              settings.consultantBonusActive ? 'bg-primary-600' : 'bg-secondary-300'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                settings.consultantBonusActive ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+
+                      {!settings.consultantBonusActive && (
+                        <p className="text-sm text-secondary-600 bg-secondary-100 rounded p-3">
+                          Bônus desativado. Consultor receberá apenas R$ {settings.consultantValuePerArcada}/arcada.
+                        </p>
+                      )}
+
+                      {settings.consultantBonusActive && (
+                        <>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                Bônus a cada quantas arcadas?
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={settings.consultantBonusEveryArcadas}
+                                onChange={(e) => setSettings(prev => ({
+                                  ...prev,
+                                  consultantBonusEveryArcadas: parseInt(e.target.value) || 1
+                                }))}
+                                className="input"
+                                placeholder="7"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-sm font-medium text-secondary-700 mb-2">
+                                Valor do Bônus (R$)
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={settings.consultantBonusValue}
+                                onChange={(e) => setSettings(prev => ({
+                                  ...prev,
+                                  consultantBonusValue: parseFloat(e.target.value) || 0
+                                }))}
+                                className="input"
+                                placeholder="750.00"
+                              />
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-primary-600">
+                            📊 Exemplo: A cada {settings.consultantBonusEveryArcadas} arcadas vendidas, 
+                            o consultor ganha um bônus de R$ {settings.consultantBonusValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </p>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs text-secondary-500 mt-1">
-                    Valor adicional ganho a cada marco de arcadas
-                  </p>
                 </div>
+              </motion.div>
 
-                <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-primary-900 mb-2">Como Funciona</h4>
-                  <ul className="text-sm text-primary-700 space-y-1">
-                    <li>• Cada arcada vendida = R$ {(commissionSettings.valor_por_arcada || 750).toFixed(2)}</li>
-                    <li>• A cada {commissionSettings.bonus_a_cada_arcadas || 7} arcadas = +R$ {(commissionSettings.valor_bonus || 750).toFixed(2)} de bônus</li>
-                    <li>• Exemplo: 7 arcadas = R$ {(7 * (commissionSettings.valor_por_arcada || 750) + (commissionSettings.valor_bonus || 750)).toFixed(2)} total</li>
-                    <li>• Exemplo: 14 arcadas = R$ {(14 * (commissionSettings.valor_por_arcada || 750) + 2 * (commissionSettings.valor_bonus || 750)).toFixed(2)} total</li>
-                  </ul>
+              {/* Comissões do Gerente */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="card"
+              >
+                <div className="card-body">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <CurrencyDollarIcon className="h-5 w-5 text-success-600 mr-2" />
+                      <h3 className="text-lg font-semibold text-secondary-900">
+                        Comissões do Gerente
+                      </h3>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-secondary-600">
+                        Bônus: {settings.managerBonusActive ? 'Ativo' : 'Inativo'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({
+                          ...prev,
+                          managerBonusActive: !prev.managerBonusActive
+                        }))}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          settings.managerBonusActive ? 'bg-success-600' : 'bg-secondary-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            settings.managerBonusActive ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Valor por Arcada do Gerente */}
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-700 mb-2">
+                        Valor por Arcada do Gerente (R$)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={settings.managerValuePerArcada}
+                        onChange={(e) => setSettings(prev => ({
+                          ...prev,
+                          managerValuePerArcada: parseFloat(e.target.value) || 0
+                        }))}
+                        className="input"
+                        placeholder="75.00"
+                      />
+                      <p className="text-xs text-success-600 mt-1">
+                        Valor pago por cada arcada vendida pela equipe (pode ser diferente do consultor)
+                      </p>
+                    </div>
+
+                    {/* Bônus do Gerente */}
+                    {!settings.managerBonusActive && (
+                      <div className="bg-secondary-100 rounded-lg p-4">
+                        <p className="text-sm text-secondary-600">
+                          Bônus desativado. Gerente receberá apenas R$ {settings.managerValuePerArcada}/arcada da equipe.
+                        </p>
+                      </div>
+                    )}
+
+                    {settings.managerBonusActive && (
+                      <div className="bg-success-50 rounded-lg p-4 space-y-4">
+                        <label className="block text-sm font-medium text-secondary-900 mb-3">
+                          Bônus por Metas de Arcadas da Equipe
+                        </label>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-secondary-600 mb-2">
+                              35 Arcadas (R$)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={settings.managerBonus35}
+                              onChange={(e) => setSettings(prev => ({
+                                ...prev,
+                                managerBonus35: parseFloat(e.target.value) || 0
+                              }))}
+                              className="input"
+                              placeholder="5000.00"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-secondary-600 mb-2">
+                              50 Arcadas (R$)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={settings.managerBonus50}
+                              onChange={(e) => setSettings(prev => ({
+                                ...prev,
+                                managerBonus50: parseFloat(e.target.value) || 0
+                              }))}
+                              className="input"
+                              placeholder="10000.00"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-secondary-600 mb-2">
+                              75 Arcadas (R$)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={settings.managerBonus75}
+                              onChange={(e) => setSettings(prev => ({
+                                ...prev,
+                                managerBonus75: parseFloat(e.target.value) || 0
+                              }))}
+                              className="input"
+                              placeholder="15000.00"
+                            />
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-success-600">
+                          📊 Bônus únicos quando a equipe atinge as metas de arcadas vendidas
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              </motion.div>
 
+              {/* Simulador de Ganhos */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="card"
+              >
+                <div className="card-header">
+                  <h3 className="text-lg font-medium text-secondary-900">
+                    📊 Simulador de Ganhos da Equipe
+                  </h3>
+                </div>
+                <div className="card-body">
+                  <SimulatorSection settings={settings} />
+                </div>
+              </motion.div>
+
+              {/* Botão Salvar */}
+              <div className="flex justify-end">
                 <button
-                  onClick={handleSaveCommissions}
-                  disabled={saving || !hasChanges}
-                  className="btn btn-primary w-full"
+                  onClick={handleSaveSettings}
+                  disabled={saving || profile?.role !== 'clinic_admin'}
+                  className="btn btn-primary"
                 >
                   {saving ? (
                     <>
@@ -598,257 +623,176 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
-            </motion.div>
+            </>
+          )}
+        </div>
+      )}
 
-            {/* Preview Calculator */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="card"
-            >
-              <div className="card-header">
-                <h3 className="text-lg font-medium text-secondary-900 flex items-center">
-                  <CalculatorIcon className="h-5 w-5 mr-2" />
-                  Simulador de Ganhos
-                </h3>
-              </div>
-              <div className="card-body space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-secondary-700 mb-2">
-                    Quantidade de Arcadas para Simulação
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    className="input"
-                    value={previewArcadas}
-                    onChange={(e) => setPreviewArcadas(parseInt(e.target.value) || 0)}
-                  />
-                </div>
-
-                <div className="space-y-4">
-                  <div className="bg-secondary-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-secondary-900 mb-2">Detalhamento</h4>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-secondary-600">Arcadas vendidas:</span>
-                        <span className="font-medium">{preview.arcadasVendidas}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-secondary-600">Valor por arcada:</span>
-                        <span className="font-medium">R$ {preview.valorPorArcada.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-secondary-600">Valor base:</span>
-                        <span className="font-medium">R$ {preview.valorBase.toFixed(2)}</span>
-                      </div>
-                      <hr className="border-secondary-200" />
-                      <div className="flex justify-between">
-                        <span className="text-secondary-600">Bônus conquistados:</span>
-                        <span className="font-medium">{preview.quantidadeBonus}x</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-secondary-600">Valor dos bônus:</span>
-                        <span className="font-medium text-success-600">R$ {preview.valorTotalBonus.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-success-50 rounded-lg p-4 border-2 border-success-300">
-                    <h4 className="text-sm font-medium text-success-900 mb-2">Total a Receber</h4>
-                    <div className="text-3xl font-bold text-success-600">
-                      R$ {preview.valorTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-
-                  {preview.proximoBonus > 0 && (
-                    <div className="bg-warning-50 rounded-lg p-4">
-                      <h4 className="text-sm font-medium text-warning-900 mb-2">Próximo Bônus</h4>
-                      <p className="text-sm text-warning-700">
-                        Faltam <strong>{preview.proximoBonus} arcadas</strong> para ganhar mais R$ {commissionSettings.valor_bonus.toFixed(2)} de bônus!
-                      </p>
-                      <p className="text-xs text-warning-600 mt-1">
-                        Próximo bônus em {preview.proximoBonusEm} arcadas totais
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="bg-primary-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-primary-900 mb-2">Marcos de Bônus</h4>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      {[1, 2, 3, 4, 5, 6].map(multiplicador => {
-                        const arcadas = multiplicador * commissionSettings.bonus_a_cada_arcadas
-                        const valor = (arcadas * commissionSettings.valor_por_arcada) + (multiplicador * commissionSettings.valor_bonus)
-                        const atingido = preview.arcadasVendidas >= arcadas
-
-                        return (
-                          <div
-                            key={multiplicador}
-                            className={`p-2 rounded text-center ${atingido
-                              ? 'bg-success-100 text-success-800 border border-success-300'
-                              : 'bg-white text-secondary-600 border border-secondary-200'
-                              }`}
-                          >
-                            <div className="font-medium">{arcadas}</div>
-                            <div>R$ {valor.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</div>
-                            {atingido && <div className="text-xs">✓</div>}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
+      {/* Outras tabs (placeholder) */}
+      {activeTab === 'establishments' && (
+        <div className="card">
+          <div className="card-body">
+            <p className="text-secondary-600">
+              Configurações de estabelecimentos em desenvolvimento...
+            </p>
           </div>
         </div>
       )}
 
-      {activeTab === 'clinic' && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card max-w-2xl"
-        >
-          <div className="card-header">
-            <h3 className="text-lg font-medium text-secondary-900 flex items-center">
-              <BuildingOfficeIcon className="h-5 w-5 mr-2" />
-              Dados da Clínica
-            </h3>
-          </div>
-          <div className="card-body space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Nome da Clínica
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  value={clinicSettings.name}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  CNPJ
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  value={clinicSettings.cnpj || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, cnpj: e.target.value }))}
-                  placeholder="00.000.000/0000-00"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  className="input"
-                  value={clinicSettings.email || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, email: e.target.value }))}
-                  placeholder="contato@clinica.com"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Telefone
-                </label>
-                <input
-                  type="tel"
-                  className="input"
-                  value={clinicSettings.phone || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, phone: e.target.value }))}
-                  placeholder="(11) 99999-9999"
-                />
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Endereço
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  value={clinicSettings.address || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, address: e.target.value }))}
-                  placeholder="Rua, número, bairro"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Cidade
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  value={clinicSettings.city || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, city: e.target.value }))}
-                  placeholder="São Paulo"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-secondary-700 mb-2">
-                  Estado
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  value={clinicSettings.state || ''}
-                  onChange={(e) => setClinicSettings(prev => ({ ...prev, state: e.target.value }))}
-                  placeholder="SP"
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={handleSaveClinic}
-              disabled={saving}
-              className="btn btn-primary"
-            >
-              {saving ? (
-                <>
-                  <div className="loading-spinner w-4 h-4 mr-2"></div>
-                  Salvando...
-                </>
-              ) : (
-                <>
-                  <CheckCircleIcon className="h-4 w-4 mr-2" />
-                  Salvar Dados da Clínica
-                </>
-              )}
-            </button>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Outras abas (placeholder para futuras implementações) */}
-      {['users', 'notifications', 'security'].includes(activeTab) && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card"
-        >
-          <div className="card-body text-center py-12">
-            <CogIcon className="mx-auto h-12 w-12 text-secondary-400 mb-4" />
-            <h3 className="text-lg font-medium text-secondary-900 mb-2">
-              Em Desenvolvimento
-            </h3>
-            <p className="text-secondary-500">
-              Esta seção será implementada em breve.
+      {activeTab === 'general' && (
+        <div className="card">
+          <div className="card-body">
+            <p className="text-secondary-600">
+              Configurações gerais em desenvolvimento...
             </p>
           </div>
-        </motion.div>
+        </div>
       )}
+
+      {activeTab === 'notifications' && (
+        <div className="card">
+          <div className="card-body">
+            <p className="text-secondary-600">
+              Configurações de notificações em desenvolvimento...
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Componente Simulador
+function SimulatorSection({ settings }: { settings: CommissionSettings }) {
+  const [arcadas, setArcadas] = useState(10)
+
+  const simulate = (arcadas: number) => {
+    const consultantBase = arcadas * settings.consultantValuePerArcada
+    
+    let consultantBonus = 0
+    if (settings.consultantBonusActive) {
+      const bonusCount = Math.floor(arcadas / settings.consultantBonusEveryArcadas)
+      consultantBonus = bonusCount * settings.consultantBonusValue
+    }
+
+    const consultantTotal = consultantBase + consultantBonus
+
+    const managerBase = arcadas * settings.managerValuePerArcada
+    
+    let managerBonus = 0
+    if (settings.managerBonusActive) {
+      if (arcadas >= 75) managerBonus = settings.managerBonus75
+      else if (arcadas >= 50) managerBonus = settings.managerBonus50
+      else if (arcadas >= 35) managerBonus = settings.managerBonus35
+    }
+
+    const managerTotal = managerBase + managerBonus
+
+    return {
+      consultant: { base: consultantBase, bonus: consultantBonus, total: consultantTotal },
+      manager: { base: managerBase, bonus: managerBonus, total: managerTotal },
+      total: consultantTotal + managerTotal,
+    }
+  }
+
+  const result = simulate(arcadas)
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-secondary-700 mb-2">
+          Arcadas convertidas pela equipe
+        </label>
+        <input
+          type="number"
+          min="1"
+          value={arcadas}
+          onChange={(e) => setArcadas(parseInt(e.target.value) || 1)}
+          className="input max-w-xs"
+          placeholder="10"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Ganhos do Consultor */}
+        <div className="bg-primary-50 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-primary-900 mb-3">
+            Ganhos do Consultor (Sem Bônus)
+          </h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-primary-700">Valor base ({arcadas} arcadas):</span>
+              <span className="font-bold text-primary-900">
+                R$ {result.consultant.base.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-primary-700">
+                Bônus ({Math.floor(arcadas / settings.consultantBonusEveryArcadas)}x):
+              </span>
+              <span className="font-bold text-primary-900">
+                R$ {result.consultant.bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                {!settings.consultantBonusActive && ' (desativado)'}
+              </span>
+            </div>
+            <div className="pt-2 border-t border-primary-200 flex justify-between">
+              <span className="font-semibold text-primary-900">Total Consultor:</span>
+              <span className="font-bold text-lg text-primary-600">
+                R$ {result.consultant.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Ganhos do Gerente */}
+        <div className="bg-success-50 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-success-900 mb-3">
+            Ganhos do Gerente (Só Base)
+          </h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-success-700">Comissão base ({arcadas} arcadas):</span>
+              <span className="font-bold text-success-900">
+                R$ {result.manager.base.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-success-700">Bônus por meta:</span>
+              <span className="font-bold text-success-900">
+                R$ {result.manager.bonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                {!settings.managerBonusActive && ' (desativado)'}
+              </span>
+            </div>
+            <div className="pt-2 border-t border-success-200 flex justify-between">
+              <span className="font-semibold text-success-900">Total Gerente:</span>
+              <span className="font-bold text-lg text-success-600">
+                R$ {result.manager.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Custo Total */}
+      <div className="bg-secondary-100 rounded-lg p-4">
+        <div className="flex justify-between items-center">
+          <span className="text-base font-semibold text-secondary-900">
+            Custo Total ({arcadas} arcadas):
+          </span>
+          <span className="text-2xl font-bold text-secondary-900">
+            R$ {result.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </span>
+        </div>
+        <ul className="mt-3 text-xs text-secondary-600 space-y-1">
+          <li>• Consultor sempre recebe R$ {settings.consultantValuePerArcada}/arcada</li>
+          {settings.consultantBonusActive && (
+            <li>• Bônus consultor: Desativado nesta simulação (apenas arcadas fixas)</li>
+          )}
+          {settings.managerBonusActive && (
+            <li>• Bônus gerente: {arcadas >= 35 ? 'Ativado' : 'Desativado'} ({arcadas} arcadas)</li>
+          )}
+        </ul>
+      </div>
     </div>
   )
 }

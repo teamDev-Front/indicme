@@ -1,7 +1,7 @@
 // src/app/dashboard/leads/page.tsx - NOVA VERSÃO COM LISTAGEM COMPLETA
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
 import { motion } from 'framer-motion'
@@ -22,12 +22,14 @@ import {
   ExclamationTriangleIcon,
   ArrowTrendingUpIcon,
   TrophyIcon,
-  CurrencyDollarIcon
+  CurrencyDollarIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 import LeadDetailModal from '@/components/leads/LeadDetailModal'
 import ArcadasModal from '@/components/leads/ArcadasModal'
+import { Dialog, Transition } from '@headlessui/react'
 
 interface Lead {
   id: string
@@ -59,6 +61,9 @@ export default function LeadsListingPage() {
   const [dateFilter, setDateFilter] = useState('')
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [isArcadasModalOpen, setIsArcadasModalOpen] = useState(false)
   const [leadForConversion, setLeadForConversion] = useState<Lead | null>(null)
   const [consultants, setConsultants] = useState<Array<{ id: string, full_name: string }>>([])
@@ -175,43 +180,97 @@ export default function LeadsListingPage() {
     }
   }
 
-const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => {
-  if (newStatus === 'converted') {
-    const lead = leads.find(l => l.id === leadId)
-    if (lead) {
-      setLeadForConversion(lead)
-      setIsArcadasModalOpen(true)
+  const handleDeleteLead = async () => {
+    if (!leadToDelete) return
+
+    try {
+      setDeleting(true)
+      console.log('🗑️ Deletando lead:', leadToDelete.full_name)
+
+      // Verificar se há comissões pagas
+      const { data: commissions } = await supabase
+        .from('commissions')
+        .select('status')
+        .eq('lead_id', leadToDelete.id)
+
+      const hasPaidCommissions = commissions?.some(c => c.status === 'paid')
+
+      if (hasPaidCommissions) {
+        toast.error('Não é possível excluir lead com comissões pagas!')
+        setIsDeleteModalOpen(false)
+        return
+      }
+
+      // Deletar comissões
+      await supabase
+        .from('commissions')
+        .delete()
+        .eq('lead_id', leadToDelete.id)
+
+      // Deletar indicações
+      await supabase
+        .from('lead_indications')
+        .delete()
+        .or(`original_lead_id.eq.${leadToDelete.id},new_lead_id.eq.${leadToDelete.id}`)
+
+      // Deletar lead
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', leadToDelete.id)
+
+      if (error) throw error
+
+      toast.success(`Lead "${leadToDelete.full_name}" excluído com sucesso!`)
+      setIsDeleteModalOpen(false)
+      setLeadToDelete(null)
+      fetchLeads() // Recarregar lista
+
+    } catch (error: any) {
+      console.error('❌ Erro ao deletar:', error)
+      toast.error(`Erro ao excluir: ${error.message}`)
+    } finally {
+      setDeleting(false)
     }
-    return
   }
 
-  try {
-    const { error } = await supabase
-      .from('leads')
-      .update({ 
-        status: newStatus,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', leadId)
+  const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => {
+    if (newStatus === 'converted') {
+      const lead = leads.find(l => l.id === leadId)
+      if (lead) {
+        setLeadForConversion(lead)
+        setIsArcadasModalOpen(true)
+      }
+      return
+    }
 
-    if (error) throw error
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', leadId)
 
-    setLeads(prev => prev.map(lead =>
-      lead.id === leadId
-        ? { 
-            ...lead, 
+      if (error) throw error
+
+      setLeads(prev => prev.map(lead =>
+        lead.id === leadId
+          ? {
+            ...lead,
             status: newStatus,
             updated_at: new Date().toISOString()
           }
-        : lead
-    ))
+          : lead
+      ))
 
-    toast.success('Status atualizado com sucesso!')
-  } catch (error: any) {
-    console.error('Erro ao atualizar status:', error)
-    toast.error('Erro ao atualizar status')
+      toast.success('Status atualizado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao atualizar status:', error)
+      toast.error('Erro ao atualizar status')
+    }
   }
-}
 
   const handleArcadasConfirm = async (arcadas: number) => {
     if (!leadForConversion) return
@@ -233,18 +292,18 @@ const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => 
       setLeads(prev => prev.map(lead =>
         lead.id === leadForConversion.id
           ? {
-              ...lead,
-              status: 'converted' as const,
-              arcadas_vendidas: arcadas,
-              converted_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            }
+            ...lead,
+            status: 'converted' as const,
+            arcadas_vendidas: arcadas,
+            converted_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
           : lead
       ))
 
       // TODO: Aqui você pode adicionar a lógica de comissão que já existe no seu sistema
       toast.success(`Lead convertido! ${arcadas} arcada${arcadas > 1 ? 's' : ''} vendida${arcadas > 1 ? 's' : ''}!`)
-      
+
       setLeadForConversion(null)
     } catch (error: any) {
       console.error('Erro ao converter lead:', error)
@@ -337,11 +396,11 @@ const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => 
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Leads</h1>
           <p className="text-secondary-600">
-            {profile?.role === 'consultant' 
-              ? 'Seus leads e indicações' 
+            {profile?.role === 'consultant'
+              ? 'Seus leads e indicações'
               : profile?.role === 'manager'
-              ? 'Leads da sua equipe'
-              : 'Todos os leads da clínica'
+                ? 'Leads da sua equipe'
+                : 'Todos os leads da clínica'
             }
           </p>
         </div>
@@ -690,6 +749,33 @@ const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => 
                             <PencilIcon className="h-4 w-4" />
                           </Link>
                         )}
+                        <div className="flex items-center justify-end space-x-2">
+                          {/* Botão Ver Detalhes (existente) */}
+                          <button
+                            onClick={() => {
+                              setSelectedLead(lead)
+                              setIsDetailModalOpen(true)
+                            }}
+                            className="text-primary-600 hover:text-primary-900 transition-colors"
+                            title="Ver detalhes"
+                          >
+                            <EyeIcon className="h-5 w-5" />
+                          </button>
+
+                          {/* 🔥 NOVO: Botão Deletar (apenas super admin) */}
+                          {profile?.role === 'clinic_admin' && (
+                            <button
+                              onClick={() => {
+                                setLeadToDelete(lead)
+                                setIsDeleteModalOpen(true)
+                              }}
+                              className="text-danger-600 hover:text-danger-900 transition-colors"
+                              title="Excluir lead"
+                            >
+                              <TrashIcon className="h-5 w-5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -771,6 +857,94 @@ const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => 
         </motion.div>
       )}
 
+      <Transition appear show={isDeleteModalOpen} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setIsDeleteModalOpen(false)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 scale-95"
+                enterTo="opacity-100 scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 scale-100"
+                leaveTo="opacity-0 scale-95"
+              >
+                <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white shadow-xl transition-all">
+                  <div className="p-6">
+                    <div className="flex items-center justify-center w-12 h-12 mx-auto bg-danger-100 rounded-full mb-4">
+                      <ExclamationTriangleIcon className="h-6 w-6 text-danger-600" />
+                    </div>
+
+                    <Dialog.Title className="text-lg font-semibold text-center text-secondary-900 mb-2">
+                      Confirmar Exclusão
+                    </Dialog.Title>
+
+                    <p className="text-sm text-secondary-600 text-center mb-4">
+                      Tem certeza que deseja excluir o lead{' '}
+                      <strong className="text-secondary-900">"{leadToDelete?.full_name}"</strong>?
+                    </p>
+
+                    <div className="bg-danger-50 border border-danger-200 rounded-lg p-3 mb-6">
+                      <p className="text-xs text-danger-800 font-medium mb-2">
+                        ⚠️ Esta ação é irreversível e irá:
+                      </p>
+                      <ul className="text-xs text-danger-700 space-y-1">
+                        <li>• Excluir todas as comissões pendentes</li>
+                        <li>• Remover indicações vinculadas</li>
+                        <li>• Deletar permanentemente o lead</li>
+                      </ul>
+                    </div>
+
+                    <div className="flex space-x-3">
+                      <button
+                        onClick={() => {
+                          setIsDeleteModalOpen(false)
+                          setLeadToDelete(null)
+                        }}
+                        disabled={deleting}
+                        className="btn btn-secondary flex-1"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={handleDeleteLead}
+                        disabled={deleting}
+                        className="btn btn-danger flex-1"
+                      >
+                        {deleting ? (
+                          <>
+                            <div className="loading-spinner w-4 h-4 mr-2"></div>
+                            Excluindo...
+                          </>
+                        ) : (
+                          <>
+                            <TrashIcon className="h-4 w-4 mr-2" />
+                            Excluir
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition>
+
       {/* Lead Detail Modal */}
       <LeadDetailModal
         isOpen={isDetailModalOpen}
@@ -779,8 +953,12 @@ const handleStatusChange = async (leadId: string, newStatus: Lead['status']) => 
           setSelectedLead(null)
         }}
         leadId={selectedLead?.id || null}
-        onLeadUpdate={fetchLeads}
+        onLeadDeleted={() => {
+          // 🔥 NOVO: Recarregar lista após deletar
+          fetchLeads()
+        }}
       />
+
 
       {/* Arcadas Modal */}
       <ArcadasModal
